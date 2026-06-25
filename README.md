@@ -40,7 +40,7 @@ ChildCheck is a **self-hosted web application** for securely checking children i
 
 ```bash
 # 1. Get the project
-git clone https://github.com/YOUR_ORG/childcheck.git
+git clone https://github.com/Newitech/childcheck.git
 cd childcheck
 
 # 2. Configure
