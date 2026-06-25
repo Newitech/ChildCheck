@@ -76,7 +76,7 @@ export function UpdatesCard() {
               <p className="text-xs mt-1">
                 Set <code className="text-xs">CHILDCHETECK_UPDATE_REPO</code> in your{" "}
                 <code className="text-xs">.env</code> (e.g.{" "}
-                <code className="text-xs">yourorg/childcheck</code>) + restart.
+                <code className="text-xs">Newitech/childcheck</code>) + restart.
               </p>
             </div>
           </div>
