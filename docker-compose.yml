@@ -21,14 +21,17 @@ services:
     restart: unless-stopped
 
     ports:
-      # Next.js (web UI + REST API). Map to 8080 on the host to avoid clashing
-      # with other dev services on :3000 — change to "3000:3000" if you prefer.
-      - "3000:3000"
-      # Realtime mini-service (Socket.io on 3003). Exposed for direct
-      # debugging; in production the reverse proxy can forward /socket.io/
-      # through the Next.js container's port 3000 instead, but our Caddy
-      # gateway uses XTransformPort=3003 so we expose it directly here.
-      - "3003:3003"
+      # Next.js (web UI + REST API).
+      # Auto-matches the PORT env var from .env (default 3000).
+      - target: 3000
+        published: "${PORT:-3000}"
+        protocol: tcp
+        mode: host
+      # Realtime mini-service (Socket.io on REALTIME_PORT).
+      - target: 3003
+        published: "${REALTIME_PORT:-3003}"
+        protocol: tcp
+        mode: host
 
     environment:
       NODE_ENV: production
