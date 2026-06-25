@@ -118,9 +118,9 @@ export default async function Home() {
         <section className="border-t bg-card/40">
           <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 py-12">
             <div className="text-center max-w-2xl mx-auto mb-10">
-              <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Everything the check-in room needs</h2>
+              <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Everything a check-in room needs</h2>
               <p className="text-muted-foreground mt-2">
-                Modelled on Rock RMS &amp; Elvanto check-in — focused, opinionated, and configurable from the dashboard.
+                All configurable from the dashboard.
               </p>
             </div>
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">

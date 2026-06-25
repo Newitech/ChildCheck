@@ -15,8 +15,6 @@ ChildCheck is a **self-hosted web application** for securely checking children i
 
 **All data stays on your hardware.** No cloud provider, no third-party data hosting. Photos and backups are encrypted at rest (AES-256-GCM). The system is a Progressive Web App (PWA) — installable on phones, tablets, and desktops like a native app.
 
-Inspired by the check-in/out components of Rock RMS and Elvanto, focused exclusively on the check-in / check-out workflow.
-
 ### Key features
 - **Kiosk mode** — touch-friendly, fullscreen, open or PIN-locked
 - **Multi-child check-in** — tick all children at once, one daily code per family
@@ -133,7 +131,6 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Acknowledgements
 
-- Inspired by the check-in/out features of [Rock RMS](https://rockrms.com) and [Elvanto](https://elvanto.com)
 - Built with [Next.js](https://nextjs.org), [Prisma](https://prisma.io), [shadcn/ui](https://ui.shadcn.com), [Bun](https://bun.sh), [Tailwind CSS](https://tailwindcss.com)
 - Realtime updates via [Socket.io](https://socket.io)
 - Charts via [Recharts](https://recharts.org)
