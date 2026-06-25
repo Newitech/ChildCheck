@@ -62,7 +62,7 @@ FROM oven/bun:1.3-debian AS runtime
 # wget (healthcheck probe), openssl (used by entrypoint to mint a default
 # NEXTAUTH_SECRET if none is provided).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends tini wget openssl ca-certificates \
+ && apt-get install -y --no-install-recommends tini wget openssl ca-certificates gosu \
  && rm -rf /var/lib/apt/lists/*
 
 # Non-root user.
@@ -120,6 +120,6 @@ EXPOSE 3000 3003
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD wget -qO- --tries=1 --timeout=3 http://localhost:3000/api/config >/dev/null 2>&1 || exit 1
 
-USER childcheck
+# USER childcheck
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]
