@@ -1,0 +1,593 @@
+// ChildCheck Prisma schema.
+// Stages 1+ will add User, Role, Person, Family, Program, Class, Session,
+// CheckInRecord, CheckOutRecord, AuditLog, FeatureFlags, etc.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// Singleton organisation row (enforced in app code: only ever id = "default").
+/// Drives branding, terminology overrides, organisation-type profile, and
+/// (in Stage 2) feature flags.
+model Organisation {
+  id           String   @id @default("default")
+  name         String   @default("ChildCheck")
+  appName      String   @default("ChildCheck")
+  tagline      String   @default("Secure Child Check-In & Check-Out")
+  primaryColor String   @default("#0f9d8a")
+  accentColor  String   @default("#e8a33d")
+  logoUrl      String?
+  /// JSON string of terminology overrides (see lib/branding.ts DEFAULT_TERMINOLOGY).
+  terminology  String?
+  /// Organisation-type profile key (see lib/org-profiles.ts ORG_PROFILES).
+  /// "SDA" | "SundayChurch" | "Scouts" | "Childcare" | "School" | "Club" | "Other".
+  orgType      String   @default("SDA")
+  /// Which day the week starts on, for calendar/date-picker display + "day N of week" numbering.
+  /// 0 = Sunday, 1 = Monday, 6 = Saturday. SDA default is 0 (Sunday-first; Saturday = 7th day).
+  /// Stored as the JS getDay() index of the first day. See src/lib/week.ts.
+  weekStartsOn Int      @default(0)
+  /// Daily check-out code length (default 3). Configurable by admin for brute-force resistance.
+  dailyCodeLength Int   @default(3)
+  /// Daily check-out code character set: "alphanumeric" (A-Z, 2-9; default — no confusing
+  /// chars like 0/O/1/I/L) or "numeric" (0-9). Alphanumeric is harder to brute-force.
+  dailyCodeCharset String @default("alphanumeric")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+/// A human — adult or child. Stage 1 stored the bare identity fields needed
+/// to back a User. Stage 3 adds the full child/family/medical/WWCC fields.
+model Person {
+  id           String   @id @default(cuid())
+  firstName    String
+  lastName     String
+  /// name helpers
+  preferredName String?
+  /// contact (Adult primarily)
+  email        String?
+  phone        String?
+  /// type — "Adult" | "Child"
+  personType   String   @default("Adult")
+  /// Child-specific
+  dateOfBirth  DateTime?
+  schoolGrade  String?
+  /// "Male" | "Female" | "Other" | null
+  gender       String?
+  /// Medical (Child primarily, but Adult can have too) — role-scoped visibility.
+  /// These fields NEVER appear in list responses; only in detail and only to
+  /// callers with view_people permission.
+  allergies    String?  // free text
+  medicalNotes String?  // free text
+  dietaryNotes String?  // free text
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  /// Photo (encrypted at rest; photoPath stores the relative path under PHOTOS_DIR).
+  photoPath    String?
+  /// Status / flags
+  isVisitor    Boolean  @default(false)   // first-time / visitor flag
+  isActive     Boolean  @default(true)    // soft-delete / archive
+  /// Audit
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  createdById  String?  // who created this Person (User id)
+  /// Relations
+  user              User?
+  familyMemberships FamilyMember[]
+  wwccards          WorkingWithChildrenCard[]
+  /// Back-relations for Stage 4 collection-authorisation features.
+  blacklistAsChild     BlacklistEntry[]            @relation("BlacklistChild")
+  blacklistAsPerson    BlacklistEntry[]            @relation("BlacklistPerson")
+  olderSiblingAsYounger OlderSiblingAuthorisation[] @relation("OlderSiblingYounger")
+  olderSiblingAsOlder   OlderSiblingAuthorisation[] @relation("OlderSiblingOlder")
+}
+
+/// A login account, always backed 1:1 by a Person.
+model User {
+  id           String   @id @default(cuid())
+  personId     String   @unique
+  username     String   @unique
+  passwordHash String
+  pinHash      String?
+  status       String   @default("Active") // "Active" | "Disabled"
+  lastLoginAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  person       Person   @relation(fields: [personId], references: [id], onDelete: Cascade)
+  roles        UserRole[]
+}
+
+/// Role assignments for a user. `role` is one of:
+/// Admin | Security | Teacher | Volunteer | Kiosk | PeopleManager.
+/// `scope` is an optional string (e.g. class id) wired in later stages.
+model UserRole {
+  id        String   @id @default(cuid())
+  userId    String
+  role      String
+  scope     String?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, role])
+}
+
+/// Feature flag overrides stored per-org. Keyed by the canonical flag keys
+/// defined in src/lib/feature-flags.ts. A missing row means "use the default".
+/// Same singleton-org pattern as the rest of the schema.
+model FeatureFlag {
+  key       String   @id // e.g. "kiosk_requires_login"
+  value     Boolean  @default(false)
+  updatedAt DateTime @updatedAt
+  updatedBy String?
+}
+
+/// A household. Has 1+ PrimaryCarer (Adult Person) and 0+ Child Persons.
+model Family {
+  id           String   @id @default(cuid())
+  familyName   String   // typically the surname, but editable
+  notes        String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  createdById  String?
+  members      FamilyMember[]
+  /// Back-relations for Stage 4 collection-authorisation features.
+  blacklistEntries           BlacklistEntry[]           @relation("BlacklistFamily")
+  olderSiblingAuthorisations OlderSiblingAuthorisation[] @relation("OlderSiblingFamily")
+}
+
+/// Join table Person <-> Family with role.
+/// `role` is one of: "PrimaryCarer" | "Child" | "AuthorisedGuardian" | "EmergencyContact".
+/// (AuthorisedGuardian / Blacklist / OlderSiblingAuthorisation arrive in Stage 4 —
+/// FamilyMember.role "AuthorisedGuardian" is reserved but unused this stage.)
+model FamilyMember {
+  id        String   @id @default(cuid())
+  familyId  String
+  personId  String
+  role      String
+  createdAt DateTime @default(now())
+  family    Family   @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  person    Person   @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  @@unique([familyId, personId])
+}
+
+/// Working-With-Children / Blue Card tracking. Gated behind the
+/// `working_with_children_tracking` feature flag.
+model WorkingWithChildrenCard {
+  id           String   @id @default(cuid())
+  personId     String
+  cardType     String   // e.g. "QLD Blue Card", "NSW WWCC", "VIC WWCC", "International", "Other"
+  jurisdiction String?  // "AU-QLD", "AU-NSW", "NZ", "US-CA", etc. — free text or coded
+  cardNumber   String?
+  status       String   @default("Pending") // "Pending" | "Verified" | "Expired" | "Cancelled"
+  issuedAt     DateTime?
+  expiresAt    DateTime?
+  verifiedById String?  // User who verified
+  verifiedAt   DateTime?
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  person       Person   @relation(fields: [personId], references: [id], onDelete: Cascade)
+}
+
+/// Append-only, tamper-evident audit log. Best-effort writes — never break requests.
+///
+/// Stage 16 adds a hash chain: each row stores `prevHash` (the hash of the
+/// previous row in the chain) and `hash` (sha256 of this row's
+/// id+action+entity+entityId+details+ip+createdAt+prevHash). Verification
+/// (src/lib/audit-verify.ts) walks the chain oldest→newest, recomputes each
+/// hash, and flags any row whose recomputed hash doesn't match the stored
+/// value (tampered) or whose prevHash doesn't match the prior row's hash
+/// (inserted/deleted).
+///
+/// Rows that predate the Stage 16 migration have null `prevHash` + `hash`
+/// and are skipped by the verifier (with a `skippedUnhashed` count in the
+/// result). The chain effectively starts from the first row that has a hash.
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorUserId String?
+  action      String   // e.g. "user.login", "setup.complete", "user.signout"
+  entity      String?
+  entityId    String?
+  details     String?  // JSON string
+  ip          String?
+  createdAt   DateTime @default(now())
+  /// Hash of the previous AuditLog row in the chain (null for the first hashed row).
+  prevHash    String?
+  /// sha256 of this row's id+action+entity+entityId+details+ip+createdAt+prevHash.
+  /// Null for rows written before the Stage 16 migration (verifier skips them).
+  hash        String?
+
+  @@index([createdAt])
+}
+
+/// A person explicitly NOT permitted to collect a specified child (or any
+/// child in a family). May reference a Person (known) or be free-text
+/// (unknown person description). Surfaced as a HARD STOP at checkout
+/// (Stage 8) + alerts Security.
+///
+/// Severity:
+///   - "blocked" — hard stop, never allow even if collector is a primary carer
+///   - "flag"    — warn the operator, supervisor approval needed to proceed
+model BlacklistEntry {
+  id          String   @id @default(cuid())
+  /// Scope: which child/family this entry blocks. Exactly one of
+  /// childId / familyId should be set (enforced in app code).
+  childId     String?  // blocks collecting THIS specific child
+  familyId    String?  // blocks collecting ANY child in this family
+  /// The blocked collector: either a known Person, or a free-text
+  /// description (name + identifying details).
+  personId    String?  // if blocked collector is a known Person
+  collectorName        String?  // free-text name if not a known Person
+  collectorDescription String?  // free-text identifying details
+  /// Why they're blocked.
+  reason      String
+  /// Severity: "blocked" (hard stop) | "flag" (warn + supervisor override).
+  severity    String   @default("blocked")
+  /// Audit
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  /// Relations. child/family Cascade so deleting them clears stale entries;
+  /// person SetNull so we keep a paper trail even if the Person row is removed.
+  child       Person?  @relation("BlacklistChild", fields: [childId], references: [id], onDelete: Cascade)
+  family      Family?  @relation("BlacklistFamily", fields: [familyId], references: [id], onDelete: Cascade)
+  person      Person?  @relation("BlacklistPerson", fields: [personId], references: [id], onDelete: SetNull)
+
+  @@index([childId])
+  @@index([familyId])
+}
+
+/// Authorises an older sibling (a Person) to collect a younger sibling
+/// (another Person) in the same family. Gated by the `older_sibling_collect`
+/// feature flag — when OFF, the section is hidden in the UI and the helper
+/// does not consider older-sibling authorisations.
+model OlderSiblingAuthorisation {
+  id             String   @id @default(cuid())
+  youngerChildId String   // the child who may be collected
+  olderSiblingId String   // the sibling authorised to collect
+  familyId       String   // denormalised for easy queries
+  /// Conditions / notes (e.g. "only if aged 16+", "only after 12pm")
+  conditions     String?
+  isActive       Boolean  @default(true)
+  authorisedById String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  youngerChild  Person   @relation("OlderSiblingYounger", fields: [youngerChildId], references: [id], onDelete: Cascade)
+  olderSibling  Person   @relation("OlderSiblingOlder", fields: [olderSiblingId], references: [id], onDelete: Cascade)
+  family        Family   @relation("OlderSiblingFamily", fields: [familyId], references: [id], onDelete: Cascade)
+
+  @@unique([youngerChildId, olderSiblingId])
+}
+
+// ---------------------------------------------------------------------------
+// Stage 5 — Programs, Classes, Events, Rooms, Schedules
+//
+// The "where and when" layer that the Stage 6 kiosk check-in runs against.
+// After Stage 5, the kiosk can ask "check in to which program today?" and
+// offer today's active sessions (see src/lib/sessions.ts).
+// ---------------------------------------------------------------------------
+
+/// A physical room/area where check-in/out happens.
+model Room {
+  id          String   @id @default(cuid())
+  name        String   // "Room 1", "Hall", "Crib Room"
+  code        String?  // short code "R1"
+  building    String?  // "Main building", "Hall"
+  capacity    Int?
+  notes       String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  classes     GroupClass[]
+  eventRooms  EventRoom[]
+  /// Stage 11 — printers explicitly assigned to this room (label/slip).
+  printers    RoomPrinter[]
+}
+
+/// A recurring program: Sabbath School, Pathfinders, Adventurers,
+/// Community Childcare, or Custom. Slug is stable across terminology changes
+/// so the seeded "Sabbath School" rows stay linked when the org renames it to
+/// "Sunday School" via the SundayChurch profile.
+model Program {
+  id          String   @id @default(cuid())
+  slug        String   @unique  // stable: "sabbath_school", "pathfinders", "adventurers", "community_childcare", or custom slug
+  name        String   // human-readable, from terminology
+  description String?
+  color       String?  // optional accent color for UI badges
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  isDefault   Boolean  @default(false)  // true for seeded defaults
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  classes     GroupClass[]
+  events      Event[]
+}
+
+/// A class/group within a program, assigned to a room + schedule.
+model GroupClass {
+  id          String   @id @default(cuid())
+  programId   String
+  name        String   // "Beginner", "Kindergarten", etc.
+  slug        String   // stable per program: "beginner", "kindergarten"...
+  description String?
+  ageMin      Int?     // target age range (informational)
+  ageMax      Int?
+  gradeLevel  String?  // "Pre-K", "Grade 5", etc.
+  roomId      String?  // assigned room (nullable — can be assigned later)
+  isActive    Boolean  @default(true)
+  isDefault   Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  program     Program  @relation(fields: [programId], references: [id], onDelete: Cascade)
+  room        Room?    @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  schedules   Schedule[]
+  eventClasses EventClass[]  // events can borrow a class
+
+  @@unique([programId, slug])
+}
+
+/// A one-off or occasional event not under a regular program.
+model Event {
+  id          String   @id @default(cuid())
+  name        String   // "Community Fun Day 2025"
+  description String?
+  date        DateTime  // the date (and start time)
+  endDate     DateTime? // optional end date/time
+  location    String?
+  programId   String?  // optional: an event can be loosely associated with a program
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  program     Program? @relation(fields: [programId], references: [id], onDelete: SetNull)
+  // Events use ad-hoc rooms/classes via EventRoom + EventClass join tables
+  rooms       EventRoom[]
+  classes     EventClass[]
+}
+
+model EventRoom {
+  id        String @id @default(cuid())
+  eventId   String
+  roomId    String
+  event     Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  room      Room    @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, roomId])
+}
+
+model EventClass {
+  id        String @id @default(cuid())
+  eventId   String
+  classId   String
+  event     Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  class     GroupClass @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, classId])
+}
+
+/// A recurring schedule for a class (day-of-week + time) or an ad-hoc date/time.
+model Schedule {
+  id          String   @id @default(cuid())
+  classId     String
+  /// "recurring" (day-of-week + time) or "adhoc" (specific date + time)
+  kind        String   // "recurring" | "adhoc"
+  dayOfWeek   Int?     // 0=Sunday ... 6=Saturday (for recurring)
+  startTime   String   // "HH:MM" 24h
+  endTime     String?  // "HH:MM" 24h
+  adhocDate   DateTime? // for adhoc kind
+  notes       String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  class       GroupClass @relation(fields: [classId], references: [id], onDelete: Cascade)
+}
+
+// ---------------------------------------------------------------------------
+// Stage 7 — Check-in flow (CheckInSession / DailyCode / CheckInRecord)
+//
+// The "what was checked in, when, by whom, with what daily code" layer that
+// the Stage 7 kiosk check-in flow writes and Stage 8 (check-out) reads.
+//
+// NOTE on @db.Date: SQLite (our dev DB) doesn't honour @db.Date — Prisma stores
+// it as a DateTime anyway. To keep "calendar day" comparisons stable across
+// time zones we always store MIDNIGHT UTC of the date in question and compare
+// by truncating to the day (see src/lib/daily-code.ts: startOfDayUTC). For
+// production PostgreSQL deployments the same semantics apply (a timestamptz
+// pointing at 00:00:00Z compares equal across the column).
+// ---------------------------------------------------------------------------
+
+/// A check-in "day" for a Program/Class/Event. e.g. "Sabbath School — 2025-01-18".
+/// One per program+date (or event+date). Created on first check-in of the day.
+model CheckInSession {
+  id          String   @id @default(cuid())
+  programId   String?  // for program-based sessions
+  eventId     String?  // for event-based sessions
+  /// Calendar day stored as midnight-UTC of that date (see module note above).
+  sessionDate DateTime
+  createdAt   DateTime @default(now())
+  checkIns    CheckInRecord[]
+
+  // Ensure one session per program+date OR event+date.
+  @@unique([programId, sessionDate])
+  @@unique([eventId, sessionDate])
+}
+
+/// A per-family-per-day daily code. Generated on first check-in of the day
+/// for that family. 3 digits (000–999), unique per family+date. Visible to
+/// all carers / authorised guardians of the family who sign in with PIN.
+/// Generated REGARDLESS of the guardian_pin_signin flag — see Stage 7 spec.
+model DailyCode {
+  id          String   @id @default(cuid())
+  familyId    String
+  /// Calendar day stored as midnight-UTC of that date (see module note above).
+  codeDate    DateTime
+  code        String   // 3-digit string "000"–"999"
+  createdAt   DateTime @default(now())
+
+  // One code per family per day.
+  @@unique([familyId, codeDate])
+}
+
+/// A single child's check-in for a session.
+model CheckInRecord {
+  id               String   @id @default(cuid())
+  checkInSessionId String
+  childPersonId    String
+  familyId         String
+  classId          String?  // which class they're checked into (may be null for events)
+  roomId           String?  // which room (denormalised from class for fast queries)
+  // Who performed the check-in + how
+  checkedInByPersonId String?  // the adult (carer/guardian) — null if kiosk-operator-only
+  checkedInByUserId   String?  // the user (kiosk/admin/teacher) — null if guardian self-serve or anonymous kiosk
+  method           String   // "guardian_pin" | "kiosk_operator" | "admin" | "teacher"
+  // The daily code generated/shown for this family on this day (denormalised for display)
+  dailyCode        String   // 3-digit
+  // Label printing
+  labelPrinted     Boolean  @default(false)
+  // Timestamps
+  checkedInAt      DateTime @default(now())
+  checkedOutAt     DateTime?
+  // Checkout info (filled in Stage 8; null means still checked in)
+  checkedOutByPersonId String?
+  checkedOutByUserId   String?
+  checkoutMethod       String?  // "code" | "pin" | "override"
+  overrideNote         String?
+  photoVerified        Boolean?
+  // Relations
+  checkInSession   CheckInSession @relation(fields: [checkInSessionId], references: [id], onDelete: Cascade)
+  overrideLogs     OverrideCheckoutLog[]
+
+  @@index([checkInSessionId])
+  @@index([familyId, checkedInAt])
+  @@index([childPersonId])
+}
+
+// ---------------------------------------------------------------------------
+// Stage 8 — Check-out flow (OverrideCheckoutLog)
+//
+// One row PER OVERRIDDEN child. Created whenever an Admin/Security/Teacher
+// uses the "override" checkout method (override_checkout flag ON). Provides
+// the mandatory paper trail for any check-out that bypasses normal
+// authorisation (e.g. a flagged-blacklist collector being released with
+// supervisor phone-confirmation, or an unknown adult with guardian
+// phone-confirmation). The note + confirmation checkbox + authorising user
+// are all mandatory — checkout API enforces this before writing any rows.
+//
+// NOTE: this model only records OVERRIDES — it does NOT include blocked-
+// severity blacklist overrides, because blocked entries are absolute and
+// can NEVER be overridden (not even by Admin). Only "flag" severity or
+// "not_authorised" cases may be overridden.
+// ---------------------------------------------------------------------------
+
+/// Mandatory audit trail for every override checkout. One row per overridden child.
+model OverrideCheckoutLog {
+  id                String   @id @default(cuid())
+  checkInRecordId   String   // the CheckInRecord that was overridden
+  childPersonId     String
+  collectorPersonId String?  // who collected (may be a flagged person)
+  authorisingUserId String   // the admin/teacher who authorised
+  note              String   // mandatory free-text reason (min 10 chars)
+  confirmed         Boolean  // the operator ticked the confirmation checkbox
+  createdAt         DateTime @default(now())
+  checkInRecord     CheckInRecord @relation(fields: [checkInRecordId], references: [id], onDelete: Cascade)
+
+  @@index([checkInRecordId])
+  @@index([childPersonId])
+  @@index([authorisingUserId])
+}
+
+// ---------------------------------------------------------------------------
+// Stage 9 — Volunteer / Teacher dashboard (HeadcountLog)
+//
+// A manual headcount recorded by a teacher/volunteer for a scope (room, class,
+// or check-in session). The volunteer dashboard compares the recorded count to
+// the actual checked-in count for that scope (queried from CheckInRecord) and
+// flags any discrepancy. Discrepancies are surfaced with a red badge so the
+// teacher can investigate (a child may have wandered off, or a check-in was
+// missed).
+// ---------------------------------------------------------------------------
+
+model HeadcountLog {
+  id               String   @id @default(cuid())
+  roomId           String?
+  classId          String?
+  checkInSessionId String?
+  count            Int
+  reportedById     String
+  notes            String?
+  createdAt        DateTime @default(now())
+
+  @@index([roomId])
+  @@index([classId])
+  @@index([checkInSessionId])
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Stage 11 — Printing subsystem
+//
+// A Printer is a destination for labels (child name tags) and slips (signout
+// code receipts). Drivers:
+//   - "browser"      → server returns HTML, the kiosk opens a hidden iframe
+//                      and calls window.print(). Zero-dependency fallback.
+//   - "qz_tray"      → server returns a QZ Tray payload; the kiosk POSTs to
+//                      the local QZ Tray Java app (https://qz.io) running on
+//                      the device. Required for raw/thermal printer control.
+//   - "thermal_raw"  → server returns ESC/POS byte commands (base64 strings);
+//                      the kiosk sends them through QZ Tray or a CUPS raw
+//                      queue. Useful for label printers without a browser driver.
+//
+// Printers can be assigned to specific Rooms (RoomPrinter). If no assignment
+// exists for the room a check-in happened in, the printer marked isDefault
+// (matching the purpose: "label" / "slip" / "both") is used.
+//
+// LabelTemplate stores a JSON layout the print API renders against a child's
+// check-in record. A default template is seeded lazily on first read.
+// ---------------------------------------------------------------------------
+
+model Printer {
+  id          String   @id @default(cuid())
+  name        String   // "Room 1 Label Printer"
+  /// "browser" | "qz_tray" | "thermal_raw"
+  driver      String   @default("browser")
+  /// For qz_tray / thermal_raw: the printer queue / CUPS name QZ should target.
+  queueName   String?
+  isDefault   Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  /// What this printer prints: "label" | "slip" | "both"
+  purpose     String   @default("both")
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  /// Rooms this printer is explicitly assigned to.
+  rooms       RoomPrinter[]
+}
+
+model RoomPrinter {
+  id        String   @id @default(cuid())
+  roomId    String
+  printerId String
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  printer   Printer  @relation(fields: [printerId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([roomId, printerId])
+}
+
+model LabelTemplate {
+  id        String   @id @default(cuid())
+  name      String   @default("Default label")
+  /// JSON layout (see src/lib/printing.ts LabelLayout). Fields + sizes + dims.
+  layout    String
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
