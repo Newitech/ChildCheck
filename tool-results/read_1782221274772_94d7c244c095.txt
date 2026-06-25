@@ -1,0 +1,929 @@
+     1→"use client";
+     2→
+     3→import { useEffect, useMemo, useState } from "react";
+     4→import Link from "next/link";
+     5→import { useRouter } from "next/navigation";
+     6→import { toast } from "sonner";
+     7→import {
+     8→  ArrowLeft,
+     9→  Loader2,
+    10→  Baby,
+    11→  AlertTriangle,
+    12→  HeartPulse,
+    13→  ShieldCheck,
+    14→  CalendarClock,
+    15→  CheckCircle2,
+    16→  Printer,
+    17→  Camera,
+    18→  KeyRound,
+    19→  Lock,
+    20→} from "lucide-react";
+    21→
+    22→import { Button } from "@/components/ui/button";
+    23→import { Checkbox } from "@/components/ui/checkbox";
+    24→import { Badge } from "@/components/ui/badge";
+    25→import {
+    26→  Card,
+    27→  CardContent,
+    28→  CardDescription,
+    29→  CardHeader,
+    30→  CardTitle,
+    31→} from "@/components/ui/card";
+    32→import {
+    33→  Select,
+    34→  SelectContent,
+    35→  SelectItem,
+    36→  SelectTrigger,
+    37→  SelectValue,
+    38→} from "@/components/ui/select";
+    39→import { Input } from "@/components/ui/input";
+    40→import { Label } from "@/components/ui/label";
+    41→import { useTerminology } from "@/hooks/use-terminology";
+    42→
+    43→export interface CheckInFlowClass {
+    44→  classId: string;
+    45→  className: string;
+    46→  roomName: string | null;
+    47→  scheduleStart: string;
+    48→  scheduleEnd: string | null;
+    49→}
+    50→export interface CheckInFlowProgram {
+    51→  programId: string | null;
+    52→  programName: string;
+    53→  slug: string | null;
+    54→  firstScheduleTime: string | null;
+    55→  classes: CheckInFlowClass[];
+    56→  events: { eventId: string; eventName: string }[];
+    57→}
+    58→export interface CheckInFlowChild {
+    59→  id: string;
+    60→  firstName: string;
+    61→  lastName: string;
+    62→  ageYears: number | null;
+    63→  schoolGrade: string | null;
+    64→  allergies: string | null;
+    65→  medicalNotes: string | null;
+    66→  currentlyCheckedIn: {
+    67→    sessionId: string;
+    68→    programId: string | null;
+    69→    eventId: string | null;
+    70→  } | null;
+    71→}
+    72→export interface CheckInFlowAdult {
+    73→  id: string;
+    74→  firstName: string;
+    75→  lastName: string;
+    76→  role: string;
+    77→}
+    78→
+    79→export interface CheckInFlowProps {
+    80→  familyId: string;
+    81→  familyName: string;
+    82→  todayLabel: string;
+    83→  children: CheckInFlowChild[];
+    84→  adults: CheckInFlowAdult[];
+    85→  activePrograms: CheckInFlowProgram[];
+    86→  guardianPinSignin: boolean;
+    87→  printNameLabels: boolean;
+    88→  printSignoutCode: boolean;
+    89→  requiresLogin: boolean;
+    90→}
+    91→
+    92→interface CheckedInChild {
+    93→  childPersonId: string;
+    94→  checkInRecordId: string;
+    95→  classId: string | null;
+    96→  className: string | null;
+    97→  roomName: string | null;
+    98→}
+    99→
+   100→interface SkippedChild {
+   101→  childPersonId: string;
+   102→  reason: "already_checked_in";
+   103→}
+   104→
+   105→interface CheckInResult {
+   106→  ok: boolean;
+   107→  dailyCode: string;
+   108→  sessionId: string;
+   109→  checkedIn: CheckedInChild[];
+   110→  skipped: SkippedChild[];
+   111→}
+   112→
+   113→type Method = "guardian_pin" | "kiosk_operator" | "admin" | "teacher";
+   114→
+   115→/**
+   116→ * Pick a sensible default class for a child based on age range. Returns null
+   117→ * if no class matches or no classes are available.
+   118→ */
+   119→function pickDefaultClass(
+   120→  child: { ageYears: number | null },
+   121→  classes: CheckInFlowClass[],
+   122→): CheckInFlowClass | null {
+   123→  if (classes.length === 0) return null;
+   124→  // We don't have ageMin/ageMax on the CheckInFlowClass DTO (left out for
+   125→  // brevity) — just default to the first class. The kiosk operator can
+   126→  // always change it via the Select.
+   127→  return classes[0];
+   128→}
+   129→
+   130→export function CheckInFlow({
+   131→  familyId,
+   132→  familyName,
+   133→  todayLabel,
+   134→  children: childList,
+   135→  adults,
+   136→  activePrograms,
+   137→  guardianPinSignin,
+   138→  printNameLabels,
+   139→  printSignoutCode,
+   140→  requiresLogin,
+   141→}: CheckInFlowProps) {
+   142→  const router = useRouter();
+   143→  const { t } = useTerminology();
+   144→
+   145→  // ---------------------------------------------------------------
+   146→  // Selection state
+   147→  // ---------------------------------------------------------------
+   148→  // Selected session: programId + (optional) classId per child.
+   149→  const [selectedProgramId, setSelectedProgramId] = useState<string | null>(null);
+   150→  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+   151→  // childId → selected
+   152→  const [selectedChildIds, setSelectedChildIds] = useState<Set<string>>(
+   153→    () => new Set(childList.map((c) => c.id)),
+   154→  );
+   155→  // childId → classId
+   156→  const [classIdByChild, setClassIdByChild] = useState<Record<string, string | null>>({});
+   157→
+   158→  // Guardian identification state.
+   159→  const [method, setMethod] = useState<Method>(
+   160→    guardianPinSignin ? "guardian_pin" : "kiosk_operator",
+   161→  );
+   162→  const [pinEntry, setPinEntry] = useState("");
+   163→  const [verifiedGuardian, setVerifiedGuardian] = useState<{
+   164→    personId: string;
+   165→    name: string;
+   166→  } | null>(null);
+   167→  const [verifyingPin, setVerifyingPin] = useState(false);
+   168→
+   169→  // Submission state.
+   170→  const [submitting, setSubmitting] = useState(false);
+   171→  const [result, setResult] = useState<CheckInResult | null>(null);
+   172→
+   173→  // ---------------------------------------------------------------
+   174→  // When the program changes, reset per-child class assignments to the
+   175→  // default class for the new program (only for children not already
+   176→  // checked in).
+   177→  // ---------------------------------------------------------------
+   178→  const selectedProgram = useMemo(
+   179→    () => activePrograms.find((p) => p.programId === selectedProgramId) ?? null,
+   180→    [activePrograms, selectedProgramId],
+   181→  );
+   182→
+   183→  const selectedEvent = useMemo(() => {
+   184→    if (!selectedEventId) return null;
+   185→    for (const p of activePrograms) {
+   186→      const e = p.events.find((ev) => ev.eventId === selectedEventId);
+   187→      if (e) return e;
+   188→    }
+   189→    return null;
+   190→  }, [activePrograms, selectedEventId]);
+   191→
+   192→  useEffect(() => {
+   193→    if (!selectedProgram) return;
+   194→    const next: Record<string, string | null> = {};
+   195→    for (const c of childList) {
+   196→      if (c.currentlyCheckedIn) {
+   197→        // Skip — they're already in.
+   198→        next[c.id] = null;
+   199→        continue;
+   200→      }
+   201→      const def = pickDefaultClass(c, selectedProgram.classes);
+   202→      next[c.id] = def?.classId ?? null;
+   203→    }
+   204→    setClassIdByChild(next);
+   205→  }, [selectedProgram, childList]);
+   206→
+   207→  // ---------------------------------------------------------------
+   208→  // Selection helpers
+   209→  // ---------------------------------------------------------------
+   210→  function toggleChild(id: string) {
+   211→    setSelectedChildIds((prev) => {
+   212→      const next = new Set(prev);
+   213→      if (next.has(id)) next.delete(id);
+   214→      else next.add(id);
+   215→      return next;
+   216→    });
+   217→  }
+   218→  function selectProgram(programId: string | null) {
+   219→    setSelectedProgramId(programId);
+   220→    setSelectedEventId(null);
+   221→  }
+   222→  function selectEvent(eventId: string) {
+   223→    setSelectedEventId(eventId);
+   224→    setSelectedProgramId(null);
+   225→  }
+   226→  function setClassForChild(childId: string, classId: string) {
+   227→    setClassIdByChild((prev) => ({ ...prev, [childId]: classId }));
+   228→  }
+   229→
+   230→  // Children that aren't already checked in (selectable).
+   231→  const selectableChildren = childList.filter((c) => !c.currentlyCheckedIn);
+   232→  const selectedSelectableChildren = selectableChildren.filter((c) =>
+   233→    selectedChildIds.has(c.id),
+   234→  );
+   235→  const selectedCount = selectedSelectableChildren.length;
+   236→
+   237→  // ---------------------------------------------------------------
+   238→  // Guardian PIN verification flow.
+   239→  // ---------------------------------------------------------------
+   240→  async function verifyPin() {
+   241→    if (pinEntry.length < 4) {
+   242→      toast.error("Enter a 4–6 digit PIN");
+   243→      return;
+   244→    }
+   245→    setVerifyingPin(true);
+   246→    try {
+   247→      const res = await fetch("/api/kiosk/guardian-signin", {
+   248→        method: "POST",
+   249→        headers: { "Content-Type": "application/json" },
+   250→        body: JSON.stringify({ familyId, pin: pinEntry }),
+   251→      });
+   252→      const data = (await res.json().catch(() => ({}))) as {
+   253→        ok?: boolean;
+   254→        personId?: string;
+   255→        name?: { firstName: string; lastName: string };
+   256→        role?: string;
+   257→        error?: string;
+   258→        retryAfterMs?: number;
+   259→      };
+   260→      if (!res.ok || !data.ok) {
+   261→        if (res.status === 429) {
+   262→          toast.error("Too many attempts", {
+   263→            description: "Please wait a minute and try again.",
+   264→          });
+   265→        } else if (data.error === "pin_signin_disabled") {
+   266→          toast.error("PIN sign-in disabled", {
+   267→            description: "Use the kiosk-operator check-in instead.",
+   268→          });
+   269→          setMethod("kiosk_operator");
+   270→        } else {
+   271→          toast.error("Incorrect PIN", {
+   272→            description: "Please try again.",
+   273→          });
+   274→        }
+   275→        return;
+   276→      }
+   277→      setVerifiedGuardian({
+   278→        personId: data.personId!,
+   279→        name: `${data.name!.firstName} ${data.name!.lastName}`,
+   280→      });
+   281→      toast.success("PIN verified", {
+   282→        description: `Signed in as ${data.name!.firstName} ${data.name!.lastName}.`,
+   283→      });
+   284→    } catch (e) {
+   285→      console.error("[guardian-signin] error:", e);
+   286→      toast.error("Network error — please try again.");
+   287→    } finally {
+   288→      setVerifyingPin(false);
+   289→    }
+   290→  }
+   291→
+   292→  function clearPin() {
+   293→    setPinEntry("");
+   294→    setVerifiedGuardian(null);
+   295→  }
+   296→
+   297→  // ---------------------------------------------------------------
+   298→  // Submit check-in.
+   299→  // ---------------------------------------------------------------
+   300→  function validate(): string | null {
+   301→    if (!selectedProgramId && !selectedEventId) {
+   302→      return "Please pick a session to check in to.";
+   303→    }
+   304→    if (selectedCount === 0) {
+   305→      return "Please select at least one child to check in.";
+   306→    }
+   307→    if (method === "guardian_pin" && !verifiedGuardian) {
+   308→      return "Please verify your PIN before checking in.";
+   309→    }
+   310→    // For program sessions, each selected child needs a class (unless the
+   311→    // program has no classes at all).
+   312→    if (selectedProgram && selectedProgram.classes.length > 0) {
+   313→      for (const c of selectedSelectableChildren) {
+   314→        const cid = classIdByChild[c.id];
+   315→        if (!cid) return `Please pick a ${t("group").toLowerCase()} for ${c.firstName} ${c.lastName}.`;
+   316→      }
+   317→    }
+   318→    return null;
+   319→  }
+   320→
+   321→  async function submit() {
+   322→    const verr = validate();
+   323→    if (verr) {
+   324→      toast.error("Missing details", { description: verr });
+   325→      return;
+   326→    }
+   327→    setSubmitting(true);
+   328→    try {
+   329→      const payload = {
+   330→        familyId,
+   331→        programId: selectedProgramId,
+   332→        eventId: selectedEventId,
+   333→        children: selectedSelectableChildren.map((c) => ({
+   334→          childPersonId: c.id,
+   335→          classId: classIdByChild[c.id] ?? null,
+   336→        })),
+   337→        checkedInByPersonId:
+   338→          method === "guardian_pin" ? verifiedGuardian?.personId ?? null : null,
+   339→        method,
+   340→      };
+   341→      const res = await fetch("/api/kiosk/checkin", {
+   342→        method: "POST",
+   343→        headers: { "Content-Type": "application/json" },
+   344→        body: JSON.stringify(payload),
+   345→      });
+   346→      const data = (await res.json().catch(() => ({}))) as CheckInResult & {
+   347→        error?: string;
+   348→        message?: string;
+   349→      };
+   350→      if (!res.ok || !data.ok) {
+   351→        toast.error("Check-in failed", {
+   352→          description: data.error ?? `Request failed (${res.status})` + (data.message ? `: ${data.message}` : ""),
+   353→        });
+   354→        return;
+   355→      }
+   356→      setResult(data);
+   357→      const skippedMsg =
+   358→        data.skipped.length > 0
+   359→          ? ` ${data.skipped.length} already checked in (skipped).`
+   360→          : "";
+   361→      toast.success("Checked in!", {
+   362→        description: `Daily code: ${data.dailyCode}${skippedMsg}`,
+   363→      });
+   364→    } catch (e) {
+   365→      console.error("[checkin] error:", e);
+   366→      toast.error("Network error — please try again.");
+   367→    } finally {
+   368→      setSubmitting(false);
+   369→    }
+   370→  }
+   371→
+   372→  // ---------------------------------------------------------------
+   373→  // Print stubs.
+   374→  // ---------------------------------------------------------------
+   375→  async function printLabels() {
+   376→    if (!result) return;
+   377→    try {
+   378→      await Promise.all(
+   379→        result.checkedIn.map((c) =>
+   380→          fetch("/api/kiosk/print/label", {
+   381→            method: "POST",
+   382→            headers: { "Content-Type": "application/json" },
+   383→            body: JSON.stringify({ checkInRecordId: c.checkInRecordId }),
+   384→          }),
+   385→        ),
+   386→      );
+   387→      toast.success("Sent to printer", { description: `${result.checkedIn.length} label(s).` });
+   388→    } catch {
+   389→      toast.error("Print failed");
+   390→    }
+   391→  }
+   392→  async function printSlip() {
+   393→    if (!result) return;
+   394→    try {
+   395→      await fetch("/api/kiosk/print/slip", {
+   396→        method: "POST",
+   397→        headers: { "Content-Type": "application/json" },
+   398→        body: JSON.stringify({ familyId }),
+   399→      });
+   400→      toast.success("Sent to printer", { description: "Signout-code slip printed." });
+   401→    } catch {
+   402→      toast.error("Print failed");
+   403→    }
+   404→  }
+   405→
+   406→  // ---------------------------------------------------------------
+   407→  // SUCCESS SCREEN
+   408→  // ---------------------------------------------------------------
+   409→  if (result) {
+   410→    return (
+   411→      <div className="flex-1 flex flex-col">
+   412→        <div className="mx-auto w-full max-w-3xl px-4 sm:px-6 py-6 flex-1 flex flex-col gap-6">
+   413→          <div className="text-center space-y-2">
+   414→            <div className="mx-auto inline-flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+   415→              <CheckCircle2 className="h-9 w-9" />
+   416→            </div>
+   417→            <h1 className="text-3xl font-bold tracking-tight">Checked in!</h1>
+   418→            <p className="text-sm text-muted-foreground">
+   419→              Show this code to anyone picking up your {t("child_plural").toLowerCase()} today —
+   420→              they can use it for fast sign-out.
+   421→            </p>
+   422→          </div>
+   423→
+   424→          <Card className="border-2 border-primary/40">
+   425→            <CardContent className="py-8 flex flex-col items-center gap-3">
+   426→              <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+   427→                Today&apos;s signout code
+   428→              </span>
+   429→              <span
+   430→                className="font-mono font-bold tabular-nums text-primary leading-none"
+   431→                style={{ fontSize: "8rem", letterSpacing: "0.05em" }}
+   432→                aria-label={`Daily code ${result.dailyCode}`}
+   433→              >
+   434→                {result.dailyCode}
+   435→              </span>
+   436→              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+   437→                <Camera className="h-3.5 w-3.5" />
+   438→                <span>Take a photo of this code or write it down.</span>
+   439→              </div>
+   440→            </CardContent>
+   441→          </Card>
+   442→
+   443→          <Card>
+   444→            <CardHeader className="pb-2">
+   445→              <CardTitle className="text-base">
+   446→                {t("child_plural")} checked in
+   447→              </CardTitle>
+   448→              <CardDescription className="text-xs">
+   449→                {result.checkedIn.length} checked in
+   450→                {result.skipped.length > 0 ? ` · ${result.skipped.length} already in (skipped)` : ""}
+   451→                {" · "}
+   452→                {todayLabel}
+   453→              </CardDescription>
+   454→            </CardHeader>
+   455→            <CardContent className="pt-0 space-y-2">
+   456→              {result.checkedIn.map((c) => {
+   457→                const child = childList.find((cl) => cl.id === c.childPersonId);
+   458→                return (
+   459→                  <div
+   460→                    key={c.childPersonId}
+   461→                    className="flex items-center justify-between rounded-lg border bg-muted/30 p-3"
+   462→                  >
+   463→                    <div className="flex items-center gap-2 min-w-0">
+   464→                      <Baby className="h-4 w-4 text-primary shrink-0" />
+   465→                      <span className="font-medium truncate">
+   466→                        {child ? `${child.firstName} ${child.lastName}` : c.childPersonId}
+   467→                      </span>
+   468→                    </div>
+   469→                    <span className="text-xs text-muted-foreground shrink-0">
+   470→                      {c.className ?? "—"}
+   471→                      {c.roomName ? ` · ${c.roomName}` : ""}
+   472→                    </span>
+   473→                  </div>
+   474→                );
+   475→              })}
+   476→              {result.skipped.length > 0 && (
+   477→                <p className="text-xs text-muted-foreground px-1 pt-1">
+   478→                  {result.skipped.length} {t("child").toLowerCase()}{result.skipped.length === 1 ? "" : t("child_plural").toLowerCase()} already checked in to this session — not duplicated.
+   479→                </p>
+   480→              )}
+   481→            </CardContent>
+   482→          </Card>
+   483→
+   484→          {printNameLabels && (
+   485→            <Button
+   486→              variant="outline"
+   487→              className="h-14 text-base w-full"
+   488→              size="lg"
+   489→              onClick={printLabels}
+   490→            >
+   491→              <Printer className="mr-2 h-5 w-5" /> Print name labels
+   492→            </Button>
+   493→          )}
+   494→          {printSignoutCode && (
+   495→            <Button
+   496→              variant="outline"
+   497→              className="h-14 text-base w-full"
+   498→              size="lg"
+   499→              onClick={printSlip}
+   500→            >
+   501→              <Printer className="mr-2 h-5 w-5" /> Print signout code slip
+   502→            </Button>
+   503→          )}
+   504→
+   505→          <Button
+   506→            className="h-16 text-base w-full"
+   507→            size="lg"
+   508→            onClick={() => router.push(`/kiosk/family/${familyId}`)}
+   509→          >
+   510→            Done — back to family
+   511→          </Button>
+   512→          <Button
+   513→            asChild
+   514→            variant="ghost"
+   515→            size="sm"
+   516→            className="h-12"
+   517→          >
+   518→            <Link href="/kiosk">Back to search</Link>
+   519→          </Button>
+   520→        </div>
+   521→      </div>
+   522→    );
+   523→  }
+   524→
+   525→  // ---------------------------------------------------------------
+   526→  // CHECK-IN FORM SCREEN
+   527→  // ---------------------------------------------------------------
+   528→  const hasPrograms = activePrograms.length > 0;
+   529→
+   530→  const sessionLabel = selectedProgram
+   531→    ? selectedProgram.programName
+   532→    : selectedEvent
+   533→      ? selectedEvent.eventName
+   534→      : null;
+   535→
+   536→  return (
+   537→    <div className="flex-1 flex flex-col">
+   538→      <div className="mx-auto w-full max-w-3xl px-4 sm:px-6 py-6 flex-1 flex flex-col gap-5 pb-28">
+   539→        <div>
+   540→          <Button asChild variant="ghost" size="sm" className="h-12 -ml-2 text-muted-foreground">
+   541→            <Link href={`/kiosk/family/${familyId}`}>
+   542→              <ArrowLeft className="mr-1.5 h-5 w-5" /> Back to {familyName}
+   543→            </Link>
+   544→          </Button>
+   545→        </div>
+   546→
+   547→        <div className="flex items-center gap-3">
+   548→          <span className="inline-flex h-14 w-14 items-center justify-center rounded-xl bg-primary/10 text-primary shrink-0">
+   549→            <CalendarClock className="h-7 w-7" />
+   550→          </span>
+   551→          <div className="min-w-0">
+   552→            <h1 className="text-3xl font-bold tracking-tight truncate">
+   553→              Check in — {familyName}
+   554→            </h1>
+   555→            <p className="text-sm text-muted-foreground">{todayLabel}</p>
+   556→          </div>
+   557→        </div>
+   558→
+   559→        {/* Session selection */}
+   560→        <Card>
+   561→          <CardHeader className="pb-3">
+   562→            <CardTitle className="text-base flex items-center gap-2">
+   563→              <CalendarClock className="h-4 w-4 text-primary" /> 1. Pick a session
+   564→            </CardTitle>
+   565→            <CardDescription className="text-xs">
+   566→              Today&apos;s active programs and events.
+   567→            </CardDescription>
+   568→          </CardHeader>
+   569→          <CardContent className="pt-0 space-y-2">
+   570→            {!hasPrograms && (
+   571→              <p className="text-sm text-muted-foreground">
+   572→                No scheduled sessions today. Ask a coordinator to create an Event if you need to check in.
+   573→              </p>
+   574→            )}
+   575→            {activePrograms.map((p) => {
+   576→              const isStandalone = p.programId === null;
+   577→              const isSelected = !isStandalone && selectedProgramId === p.programId;
+   578→              const hasEventsSelected =
+   579→                isStandalone && selectedEventId !== null &&
+   580→                p.events.some((e) => e.eventId === selectedEventId);
+   581→              return (
+   582→                <div key={p.programId ?? "standalone"}>
+   583→                  <button
+   584→                    type="button"
+   585→                    onClick={() => !isStandalone && selectProgram(p.programId)}
+   586→                    disabled={isStandalone || (p.programId !== null && p.classes.length === 0)}
+   587→                    className={`w-full text-left rounded-lg border p-3 transition-colors disabled:cursor-default ${
+   588→                      isSelected
+   589→                        ? "border-primary bg-primary/10 ring-1 ring-primary"
+   590→                        : hasEventsSelected
+   591→                          ? "border-primary/50 bg-primary/5"
+   592→                          : isStandalone
+   593→                            ? "border-dashed border-border bg-muted/30 cursor-default"
+   594→                            : "border-border bg-card hover:bg-accent/40"
+   595→                    }`}
+   596→                  >
+   597→                    <div className="flex items-center justify-between gap-2">
+   598→                      <div className="min-w-0">
+   599→                        <p className="font-medium text-sm truncate">{p.programName}</p>
+   600→                        <p className="text-xs text-muted-foreground mt-0.5">
+   601→                          {isStandalone
+   602→                            ? `${p.events.length} event${p.events.length === 1 ? "" : "s"}`
+   603→                            : p.firstScheduleTime
+   604→                              ? `${p.classes.length} ${t("group_plural").toLowerCase()} · ${p.firstScheduleTime}`
+   605→                              : `${p.classes.length} ${t("group_plural").toLowerCase()}`}
+   606→                        </p>
+   607→                      </div>
+   608→                      {isSelected && <Badge variant="default">Selected</Badge>}
+   609→                    </div>
+   610→                  </button>
+   611→                  {p.events.length > 0 && (
+   612→                    <div className="mt-2 flex flex-wrap gap-1.5 pl-1">
+   613→                      <span className="text-[11px] text-muted-foreground self-center">Events:</span>
+   614→                      {p.events.map((e) => {
+   615→                        const sel = selectedEventId === e.eventId;
+   616→                        return (
+   617→                          <button
+   618→                            key={e.eventId}
+   619→                            type="button"
+   620→                            onClick={() => selectEvent(e.eventId)}
+   621→                            className={`text-xs rounded-md border px-2 py-1 transition-colors ${
+   622→                              sel
+   623→                                ? "border-primary bg-primary/10"
+   624→                                : "border-border bg-background hover:bg-accent/40"
+   625→                            }`}
+   626→                          >
+   627→                            {e.eventName}
+   628→                          </button>
+   629→                        );
+   630→                      })}
+   631→                    </div>
+   632→                  )}
+   633→                </div>
+   634→              );
+   635→            })}
+   636→          </CardContent>
+   637→        </Card>
+   638→
+   639→        {/* Children selection */}
+   640→        <Card>
+   641→          <CardHeader className="pb-3">
+   642→            <CardTitle className="text-base flex items-center gap-2">
+   643→              <Baby className="h-4 w-4 text-primary" /> 2. Select {t("child_plural").toLowerCase()} + {t("group_plural").toLowerCase()}
+   644→            </CardTitle>
+   645→            <CardDescription className="text-xs">
+   646→              Tick the {t("child_plural").toLowerCase()} checking in to <strong>{sessionLabel ?? "—"}</strong>.
+   647→              Allergies + medical notes are shown here for safety.
+   648→            </CardDescription>
+   649→          </CardHeader>
+   650→          <CardContent className="pt-0 space-y-3">
+   651→            {childList.length === 0 && (
+   652→              <p className="text-sm text-muted-foreground">
+   653→                No {t("child_plural").toLowerCase()} on this family.
+   654→              </p>
+   655→            )}
+   656→            {childList.map((c) => {
+   657→              const isSelectable = !c.currentlyCheckedIn;
+   658→              const isSelected = selectedChildIds.has(c.id);
+   659→              const hasAllergies = !!c.allergies && c.allergies.trim().length > 0;
+   660→              const hasMedical = !!c.medicalNotes && c.medicalNotes.trim().length > 0;
+   661→              const hasAlert = hasAllergies || hasMedical;
+   662→              return (
+   663→                <div
+   664→                  key={c.id}
+   665→                  className={`rounded-xl border p-3 space-y-3 ${
+   666→                    hasAlert ? "border-destructive/40 bg-destructive/5" : "bg-card"
+   667→                  } ${!isSelectable ? "opacity-60" : ""}`}
+   668→                >
+   669→                  <div className="flex items-start gap-3">
+   670→                    <Checkbox
+   671→                      id={`chk-${c.id}`}
+   672→                      checked={isSelected}
+   673→                      onCheckedChange={() => isSelectable && toggleChild(c.id)}
+   674→                      disabled={!isSelectable}
+   675→                      className="mt-1"
+   676→                    />
+   677→                    <div className="flex-1 min-w-0">
+   678→                      <div className="flex items-center gap-2 flex-wrap">
+   679→                        <label
+   680→                          htmlFor={`chk-${c.id}`}
+   681→                          className={`font-medium ${isSelectable ? "cursor-pointer" : ""}`}
+   682→                        >
+   683→                          {c.firstName} {c.lastName}
+   684→                        </label>
+   685→                        {c.ageYears !== null && (
+   686→                          <Badge variant="secondary" className="text-[10px]">
+   687→                            {c.ageYears} yrs
+   688→                          </Badge>
+   689→                        )}
+   690→                        {c.schoolGrade && (
+   691→                          <Badge variant="outline" className="text-[10px]">
+   692→                            {c.schoolGrade}
+   693→                          </Badge>
+   694→                        )}
+   695→                      </div>
+   696→                      <p className="text-xs text-muted-foreground mt-0.5">
+   697→                        {isSelectable ? "" : ""}
+   698→                      </p>
+   699→                    </div>
+   700→                    {c.currentlyCheckedIn ? (
+   701→                      <Badge variant="default" className="gap-1 shrink-0 bg-emerald-600 hover:bg-emerald-600">
+   702→                        <CheckCircle2 className="h-3 w-3" /> Already checked in ✓
+   703→                      </Badge>
+   704→                    ) : hasAlert ? (
+   705→                      <Badge variant="destructive" className="gap-1 shrink-0">
+   706→                        <AlertTriangle className="h-3 w-3" /> Alert
+   707→                      </Badge>
+   708→                    ) : null}
+   709→                  </div>
+   710→
+   711→                  {/* Allergy / medical alerts — UNMISSABLE */}
+   712→                  {hasAlert && (
+   713→                    <div className="space-y-1.5">
+   714→                      {hasAllergies && (
+   715→                        <div className="rounded-md bg-destructive/10 border border-destructive/30 px-3 py-2 text-sm text-destructive flex items-start gap-2">
+   716→                          <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+   717→                          <div>
+   718→                            <p className="font-semibold">Allergy: {c.allergies}</p>
+   719→                          </div>
+   720→                        </div>
+   721→                      )}
+   722→                      {hasMedical && (
+   723→                        <div className="rounded-md bg-destructive/10 border border-destructive/30 px-3 py-2 text-sm text-destructive flex items-start gap-2">
+   724→                          <HeartPulse className="h-4 w-4 mt-0.5 shrink-0" />
+   725→                          <div>
+   726→                            <p className="font-semibold">Medical: {c.medicalNotes}</p>
+   727→                          </div>
+   728→                        </div>
+   729→                      )}
+   730→                    </div>
+   731→                  )}
+   732→
+   733→                  {/* Class assignment — only when this program has classes and child is selectable + selected */}
+   734→                  {isSelectable && isSelected && selectedProgram && selectedProgram.classes.length > 0 && (
+   735→                    <div className="flex items-center gap-3 pt-1">
+   736→                      <Label htmlFor={`class-${c.id}`} className="text-xs text-muted-foreground shrink-0">
+   737→                        {t("group")}:
+   738→                      </Label>
+   739→                      <Select
+   740→                        value={classIdByChild[c.id] ?? ""}
+   741→                        onValueChange={(v) => setClassForChild(c.id, v)}
+   742→                      >
+   743→                        <SelectTrigger id={`class-${c.id}`} className="h-11 flex-1">
+   744→                          <SelectValue placeholder={`Pick a ${t("group").toLowerCase()}`} />
+   745→                        </SelectTrigger>
+   746→                        <SelectContent>
+   747→                          {selectedProgram.classes.map((cls) => (
+   748→                            <SelectItem key={cls.classId} value={cls.classId}>
+   749→                              {cls.className}
+   750→                              {cls.roomName ? ` · ${cls.roomName}` : ""}
+   751→                            </SelectItem>
+   752→                          ))}
+   753→                        </SelectContent>
+   754→                      </Select>
+   755→                    </div>
+   756→                  )}
+   757→                </div>
+   758→              );
+   759→            })}
+   760→          </CardContent>
+   761→        </Card>
+   762→
+   763→        {/* Guardian identification */}
+   764→        <Card>
+   765→          <CardHeader className="pb-3">
+   766→            <CardTitle className="text-base flex items-center gap-2">
+   767→              <ShieldCheck className="h-4 w-4 text-primary" /> 3. Identify yourself
+   768→            </CardTitle>
+   769→            <CardDescription className="text-xs">
+   770→              Who is performing this check-in?
+   771→            </CardDescription>
+   772→          </CardHeader>
+   773→          <CardContent className="pt-0 space-y-3">
+   774→            {guardianPinSignin && (
+   775→              <div className="space-y-2">
+   776→                <label className="flex items-start gap-3 rounded-lg border p-3 cursor-pointer">
+   777→                  <input
+   778→                    type="radio"
+   779→                    name="method"
+   780→                    className="mt-1"
+   781→                    checked={method === "guardian_pin"}
+   782→                    onChange={() => setMethod("guardian_pin")}
+   783→                  />
+   784→                  <div className="space-y-1 flex-1">
+   785→                    <div className="flex items-center gap-2">
+   786→                      <KeyRound className="h-4 w-4 text-primary" />
+   787→                      <span className="text-sm font-medium">
+   788→                        Sign in as guardian (PIN)
+   789→                      </span>
+   790→                    </div>
+   791→                    <p className="text-xs text-muted-foreground">
+   792→                      Verify with your 4–6 digit PIN. The check-in will be
+   793→                      attributed to you.
+   794→                    </p>
+   795→                    {method === "guardian_pin" && (
+   796→                      <div className="pt-2 space-y-2">
+   797→                        {verifiedGuardian ? (
+   798→                          <div className="rounded-md border bg-emerald-50 dark:bg-emerald-950/40 p-2.5 text-sm flex items-center justify-between gap-2">
+   799→                            <span className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300 min-w-0">
+   800→                              <CheckCircle2 className="h-4 w-4 shrink-0" />
+   801→                              <span className="truncate">
+   802→                                Verified: <strong>{verifiedGuardian.name}</strong>
+   803→                              </span>
+   804→                            </span>
+   805→                            <Button
+   806→                              variant="ghost"
+   807→                              size="sm"
+   808→                              className="h-7 text-xs"
+   809→                              onClick={clearPin}
+   810→                            >
+   811→                              Change
+   812→                            </Button>
+   813→                          </div>
+   814→                        ) : (
+   815→                          <>
+   816→                            <div className="flex gap-2">
+   817→                              <Input
+   818→                                type="password"
+   819→                                inputMode="numeric"
+   820→                                autoComplete="off"
+   821→                                placeholder="Enter PIN"
+   822→                                value={pinEntry}
+   823→                                onChange={(e) => setPinEntry(e.target.value.replace(/\D/g, "").slice(0, 6))}
+   824→                                className="h-12 text-lg font-mono tracking-widest"
+   825→                                onKeyDown={(e) => {
+   826→                                  if (e.key === "Enter") verifyPin();
+   827→                                }}
+   828→                              />
+   829→                              <Button
+   830→                                type="button"
+   831→                                className="h-12 px-4"
+   832→                                onClick={verifyPin}
+   833→                                disabled={verifyingPin || pinEntry.length < 4}
+   834→                              >
+   835→                                {verifyingPin ? (
+   836→                                  <Loader2 className="h-5 w-5 animate-spin" />
+   837→                                ) : (
+   838→                                  "Verify"
+   839→                                )}
+   840→                              </Button>
+   841→                            </div>
+   842→                            <p className="text-[11px] text-muted-foreground">
+   843→                              Tip: ask an admin to set your PIN if you don&apos;t have one yet.
+   844→                            </p>
+   845→                          </>
+   846→                        )}
+   847→                      </div>
+   848→                    )}
+   849→                  </div>
+   850→                </label>
+   851→
+   852→                <label className="flex items-start gap-3 rounded-lg border p-3 cursor-pointer">
+   853→                  <input
+   854→                    type="radio"
+   855→                    name="method"
+   856→                    className="mt-1"
+   857→                    checked={method === "kiosk_operator"}
+   858→                    onChange={() => {
+   859→                      setMethod("kiosk_operator");
+   860→                      clearPin();
+   861→                    }}
+   862→                  />
+   863→                  <div className="space-y-1">
+   864→                    <div className="flex items-center gap-2">
+   865→                      <Lock className="h-4 w-4 text-muted-foreground" />
+   866→                      <span className="text-sm font-medium">
+   867→                        Check in as kiosk operator
+   868→                      </span>
+   869→                    </div>
+   870→                    <p className="text-xs text-muted-foreground">
+   871→                      {requiresLogin
+   872→                        ? "Attributed to the signed-in kiosk operator."
+   873→                        : "Attributed to the kiosk (no PIN)."}
+   874→                    </p>
+   875→                  </div>
+   876→                </label>
+   877→              </div>
+   878→            )}
+   879→
+   880→            {!guardianPinSignin && (
+   881→              <div className="rounded-md bg-muted/30 p-3 text-sm text-muted-foreground flex items-start gap-2">
+   882→                <Lock className="h-4 w-4 mt-0.5 shrink-0" />
+   883→                <p>
+   884→                  Guardian PIN sign-in is disabled by your administrators. This
+   885→                  check-in will be attributed to the kiosk operator.
+   886→                  {requiresLogin ? "" : " (Open kiosk — no login required.)"}
+   887→                </p>
+   888→              </div>
+   889→            )}
+   890→          </CardContent>
+   891→        </Card>
+   892→      </div>
+   893→
+   894→      {/* Sticky submit footer */}
+   895→      <div className="sticky bottom-0 border-t bg-background/95 backdrop-blur">
+   896→        <div className="mx-auto w-full max-w-3xl px-4 sm:px-6 py-3 flex items-center gap-3">
+   897→          <Button asChild variant="ghost" size="sm" className="h-12">
+   898→            <Link href={`/kiosk/family/${familyId}`}>
+   899→              <ArrowLeft className="mr-1.5 h-4 w-4" /> Cancel
+   900→            </Link>
+   901→          </Button>
+   902→          <Button
+   903→            className="flex-1 h-16 text-base"
+   904→            size="lg"
+   905→            disabled={
+   906→              submitting ||
+   907→              selectedCount === 0 ||
+   908→              (!selectedProgramId && !selectedEventId) ||
+   909→              (method === "guardian_pin" && !verifiedGuardian)
+   910→            }
+   911→            onClick={submit}
+   912→          >
+   913→            {submitting ? (
+   914→              <>
+   915→                <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Checking in…
+   916→              </>
+   917→            ) : (
+   918→              <>
+   919→                <CheckCircle2 className="mr-2 h-5 w-5" />
+   920→                Check in {selectedCount} {selectedCount === 1 ? t("child") : t("child_plural")}
+   921→              </>
+   922→            )}
+   923→          </Button>
+   924→        </div>
+   925→      </div>
+   926→    </div>
+   927→  );
+   928→}
+   929→

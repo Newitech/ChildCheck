@@ -1,0 +1,464 @@
+     1→# ChildCheck — Secure Child Check-In / Check-Out System
+     2→
+     3→**A self-hosted, cross-platform, web-based child check-in / check-out system for churches (Seventh-Day Adventist focused), clubs, schools, and childcare organisations.**
+     4→
+     5→Inspired by the check-in/out components of Rock RMS and Elvanto, but re-imagined as a standalone, self-hosted, privacy-first system focused exclusively on the check-in / check-out workflow.
+     6→
+     7→---
+     8→
+     9→## 1. Vision & Goals
+    10→
+    11→### 1.1 What we are building
+    12→A single deployable application that lets an organisation (church, club, school, childcare centre, playgroup, Scouts troop, etc.) securely check children **in** to and **out** of programs, classes, and one-off events — while keeping **all personal and child data on the organisation's own infrastructure** (no cloud provider, no third-party data hosting).
+    13→
+    14→### 1.2 Primary target audience
+    15→- **Primary:** Seventh-Day Adventist churches running **Sabbath School**, **Pathfinders**, **Adventurers**, community childcare, and custom programs.
+    16→- **Secondary (via branding/config):** Any church (e.g. one that prefers the term "Sunday School"), Scouts, childcare centres, playgroups, schools, clubs.
+    17→
+    18→### 1.3 Core principles
+    19→1. **Self-hosted & local-first** — all data stays on the organisation's hardware/network. No mandatory cloud dependency.
+    20→2. **Cross-platform** — runs on Linux, Windows, macOS, NAS devices, and Docker.
+    21→3. **Web-accessible + installable** — a responsive web app that can be "installed" to the home screen / desktop (PWA) on Android, iOS, Windows, macOS, Linux.
+    22→4. **Secure by default** — personal + child data is encrypted at rest, access is role-based, all sensitive actions are audit-logged.
+    23→5. **Configurable, not custom-coded** — branding, terminology, and feature toggles live in an Admin Dashboard so the same binary serves an SDA church, a Scouts troop, or a childcare centre.
+    24→6. **Offline-resilient kiosk** — the kiosk keeps working during network blips and resyncs when connectivity returns.
+    25→
+    26→### 1.4 Non-goals (explicitly out of scope for this build)
+    27→- A full church management system (we are not rebuilding Rock/Elvanto — only the check-in/out slice).
+    28→- Cloud hosting / SaaS multi-tenancy. (Single organisation per install; multi-site is a *future* item.)
+    29→- Replacing the organisation's existing CRM/CHM. (Future import/export integrations are planned.)
+    30→
+    31→---
+    32→
+    33→## 2. Key Use Cases
+    34→
+    35→| # | Actor | Use case |
+    36→|---|-------|----------|
+    37→| UC-1 | Guardian (Primary Carer) | Self-register family + children, set PIN/password, manage own data. |
+    38→| UC-2 | Guardian | Add/remove **Authorised Guardians** (grandparents, aunts/uncles) who may sign children in/out but not edit family data. |
+    39→| UC-3 | Guardian | Add an entry to the **Blacklist** (person explicitly NOT permitted to collect a child). |
+    40→| UC-4 | Guardian | At a kiosk, search own family, tick multiple children, sign them all in with one action, receive a daily 3-digit code. |
+    41→| UC-5 | Guardian | Return later, enter the 3-digit code (or PIN) for quick sign-out of some/all children. |
+    42→| UC-6 | Visitor / First-timer | At a kiosk, quickly add themselves + child(ren) for the day, with an option to **add / not add** to the regular database. |
+    43→| UC-7 | Kiosk (open mode) | Walk-up user searches families by name / surname / phone / email. |
+    44→| UC-8 | Kiosk (locked mode) | A Kiosk Account PIN is required before the search screen is shown. |
+    45→| UC-9 | Admin / Teacher | Override checkout after confirming with an authorised guardian — must tick a confirmation box + write a note. |
+    46→| UC-10 | Teacher / Volunteer | Open the Volunteer Dashboard, see live room roster, take headcounts, process manual check-outs, view/print/email reports. |
+    47→| UC-11 | Admin | Configure branding, terminology, feature toggles, printers, programs, classes, events. |
+    48→| UC-12 | Admin | Import families/people from CSV; export data; backup & restore. |
+    49→| UC-13 | Admin | Promote a Person to Admin / Teacher / Volunteer / Kiosk — credentials flow from the Person record. |
+    50→| UC-14 | Guardian | Authorise an **older sibling** to collect a younger sibling. |
+    51→
+    52→---
+    53→
+    54→## 3. Technology Stack & Architecture
+    55→
+    56→### 3.1 Stack (locked)
+    57→| Layer | Choice | Rationale |
+    58→|-------|--------|-----------|
+    59→| Framework | **Next.js 16 (App Router) + TypeScript 5** | Already initialised; SSR + API routes in one binary; PWA-capable. |
+    60→| UI | **Tailwind CSS 4 + shadcn/ui (New York) + Lucide** | Consistent, accessible, already present. |
+    61→| State | **Zustand** (client) + **TanStack Query** (server) | Already available. |
+    62→| Auth | **NextAuth.js v4** (credentials provider, PIN/password, optional email recovery) | Already available; works fully offline. |
+    63→| ORM | **Prisma** | Already available. |
+    64→| DB (default) | **SQLite** (file-based, zero-config, perfect for self-hosting on a NAS) | Portable, ships inside the install. |
+    65→| DB (optional) | **PostgreSQL** (documented swap path in `.env`) | For larger orgs / multi-device write load. |
+    66→| Realtime | **Socket.io** mini-service (separate port, gateway-routed) | Live roster updates to teacher dashboard & kiosks. |
+    67→| Printing | **QZ Tray** or **node-thermal-printer** / browser print to configured queues | Cross-platform label printing. |
+    68→| Packaging | **Docker** (primary) + **Bun standalone binary** + **systemd/launchd/Winsw** service wrappers | Cross-platform deployment. |
+    69→
+    70→### 3.2 High-level architecture
+    71→```
+    72→┌──────────────────────────────────────────────────────────────┐
+    73→│  Client (any modern browser / installed PWA)                  │
+    74→│  ├─ Kiosk UI        ├─ Guardian Self-Service UI               │
+    75→│  └─ Admin / Volunteer Dashboard UI                            │
+    76→└───────────────────────────┬──────────────────────────────────┘
+    77→                            │ HTTPS (Caddy gateway, port 3000)
+    78→┌───────────────────────────▼──────────────────────────────────┐
+    79→│  Next.js 16 App (API routes + Server Components)              │
+    80→│  ├─ NextAuth (PIN/password, session, RBAC)                    │
+    81→│  ├─ Domain APIs (people, families, check-in/out, reports)     │
+    82→│  └─ Audit log, backup/restore, import/export                  │
+    83→└──────────┬──────────────────────────────┬────────────────────┘
+    84→           │                              │
+    85→   ┌───────▼───────┐              ┌───────▼────────┐
+    86→   │ Prisma Client │              │ Socket.io svc  │
+    87→   │ SQLite/PG     │              │ (port 3003)    │
+    88→   └───────────────┘              └────────────────┘
+    89→           │
+    90→   ┌───────▼───────┐
+    91→   │ File storage  │  (photos, backups, label templates)
+    92→   │ ./data/       │  encrypted at rest via app-layer AES
+    93→   └───────────────┘
+    94→```
+    95→
+    96→### 3.3 Cross-platform packaging strategy
+    97→- **Docker** — primary, recommended for NAS / Linux servers. Single `docker-compose.yml` with volumes for `./data` and `./db`.
+    98→- **Bun standalone binary** — `bun build --compile` produces a single executable for Linux/macOS/Windows. Bundles the Next.js standalone output.
+    99→- **Service wrappers** — systemd unit (Linux), launchd plist (macOS), winsw/nssm (Windows), Synology DSM task (NAS).
+   100→- **Install scripts** — one-shot bash (Linux/Mac) and PowerShell (Windows) scripts in `/install/`.
+   101→
+   102→### 3.4 PWA / "install like an app"
+   103→- Web manifest with `display: standalone`, maskable icons, theme colour pulled from branding config.
+   104→- Service worker for offline shell + cached kiosk assets.
+   105→- On iOS/Android/Chrome/Edge, "Add to Home Screen" / "Install" produces an app-like icon with no browser chrome.
+   106→- Same binary serves kiosk tablets, guardian phones, admin desktops.
+   107→
+   108→---
+   109→
+   110→## 4. Core Domain Model (high level)
+   111→
+   112→> Full Prisma schema is defined stage-by-stage. This is the conceptual map.
+   113→
+   114→### 4.1 Organisation & Configuration
+   115→- **Organisation** (singleton) — name, branding (logo, colours, terminology overrides: e.g. "Sabbath School" vs "Sunday School" vs "Unit").
+   116→- **FeatureFlags** — every enable/disable toggle in the Admin Dashboard (see §6).
+   117→- **Printer** — name, driver type, assigned area/classroom.
+   118→- **Area / Room** — physical locations where check-in/out happens.
+   119→
+   120→### 4.2 Programs, Classes, Events
+   121→- **Program** — recurring program (Sabbath School, Pathfinders, Adventurers, Community Childcare, Custom…).
+   122→- **Group / Class** — a class within a program (e.g. "Beginner", "Kindergarten", "Primary", "Juniors"). Assigned to a Room and a Schedule.
+   123→- **Schedule** — when a class meets (day-of-week + time, or ad-hoc).
+   124→- **Event** — a one-off / occasional event not under a regular program (e.g. "Community Fun Day 2025"). Can reuse classes or define ad-hoc rooms.
+   125→
+   126→### 4.3 People & Families
+   127→- **Person** — a human. Has a `personType`: `Adult` | `Child`. Common fields + type-specific fields.
+   128→  - Adult-only fields: email, phone, PIN, password hash, self-manage flag.
+   129→  - Child-only fields: DOB, school grade, allergies, medical notes, photo-verification flag.
+   130→- **Family** — a household. Has 1+ **PrimaryCarer** (Adult Person) and 0+ Child Persons.
+   131→- **FamilyMembership** — join table Person↔Family with role (`PrimaryCarer`, `Child`, `AuthorisedGuardian`, `EmergencyContact`).
+   132→- **AuthorisedGuardian** — an Adult Person (may belong to their *own* Family) who can sign in/out a given Family's children but cannot edit that family's data.
+   133→- **BlacklistEntry** — Person (or free-text name+description) explicitly **not** permitted to collect a specified child/family.
+   134→- **OlderSiblingAuthorisation** — flag + details allowing an older sibling Person to collect a younger sibling.
+   135→- **WorkingWithChildrenCard** — card type (e.g. "QLD Blue Card", "NSW WWCC", international equivalent), number, status, expiry, verified-by.
+   136→
+   137→### 4.4 Users & Security Roles
+   138→- **User** — a login account. **Linked 1:1 to a Person** (Admin, Teacher, Volunteer, Kiosk all link from PEOPLE records and share the Person's credentials).
+   139→- **Role** — `Admin`, `Security`, `Teacher`, `Volunteer`, `Kiosk`, `PeopleManager`.
+   140→- **RoleAssignment** — User↔Role with optional scope (e.g. Teacher scoped to a Class).
+   141→- **Permission** — granular actions (`check_in`, `check_out`, `override_checkout`, `view_roster`, `manage_people`, `manage_programs`, `manage_system`, `run_reports`, `backup_restore`).
+   142→
+   143→### 4.5 Check-In / Check-Out
+   144→- **Session** — a check-in "day" for a Program/Class/Event (e.g. "Sabbath School — 2025-01-18").
+   145→- **CheckInRecord** — Child Person, Session, Class/Room, checked-in-by (User/Guardian), timestamp, generated **DailyCode** (3-digit), label-printed flag.
+   146→- **CheckOutRecord** — Child Person, Session, checked-out-by, timestamp, method (`Code` | `PIN` | `Override`), override note (if any), photo-verified flag.
+   147→- **DailyCode** — a random 3-digit code generated per **family per day** (visible to all carers/guardians of that family who sign in with PIN). Used for quick sign-out.
+   148→- **HeadcountLog** — Teacher-entered headcount snapshots per Room/Session.
+   149→- **OverrideCheckoutLog** — mandatory confirmation checkbox + free-text note + authorising User, for every override.
+   150→
+   151→### 4.6 Audit
+   152→- **AuditLog** — actor, action, entity, before/after, timestamp, IP. Append-only, tamper-evident (chained hash).
+   153→
+   154→---
+   155→
+   156→## 5. Security Model
+   157→
+   158→| Concern | Approach |
+   159→|---------|----------|
+   160→| Data residency | 100% on the organisation's hardware. No outbound data calls except optional SMTP for email recovery/notifications. |
+   161→| Encryption at rest | Photos + backups encrypted with AES-256-GCM (key derived from a master secret in env/config, rotatable). DB file permissions locked to the service user. |
+   162→| Passwords | bcrypt-hashed. Optional PIN (4–6 digits) for kiosk/guardian quick login. |
+   163→| Sessions | HTTP-only, Secure, SameSite=Strict cookies; configurable session TTL; idle timeout on kiosk. |
+   164→| RBAC | Role → Permission matrix enforced in API route handlers (server-side, never trust client). |
+   165→| Audit | Every check-in/out, override, data change, config change, login written to append-only audit log. |
+   166→| Rate limiting | Login + kiosk search rate-limited to prevent enumeration. |
+   167→| Backup | Encrypted, downloadable, restorable. Scheduled option. |
+   168→| Network | Caddy terminates TLS; recommend LAN-only exposure by default. Documented hardening guide. |
+   169→| Child data minimisation | Photos optional + toggleable; medical/allergy fields shown only to authorised roles; visitor records purgeable. |
+   170→
+   171→---
+   172→
+   173→## 6. Feature Toggles (Admin Dashboard)
+   174→
+   175→Every toggle below is an **enable/disable** switch in the Admin Dashboard, stored in `FeatureFlags`.
+   176→
+   177→| Toggle | Default | Effect when ON |
+   178→|--------|---------|----------------|
+   179→| `kiosk_requires_login` | OFF | Kiosk requires a Kiosk-Account PIN before showing search. |
+   180→| `guardian_pin_signin` | ON | Guardians/Authorised Guardians can sign in with PIN/password at kiosk to sign children in/out. |
+   181→| `guardian_self_registration` | OFF | Guardians can self-register & self-manage family data + PIN/password. |
+   182→| `email_recovery` | OFF | Allow email-based password recovery (requires internet/SMTP). |
+   183→| `email_as_contact` | ON | Email stored as a contact/communication method (not used for auth). |
+   184→| `photo_verification` | ON | Photos required/used for child + adult verification at checkout. |
+   185→| `print_name_labels` | ON | Print a child name label at check-in. |
+   186→| `print_signout_code` | ON | Print the daily 3-digit code + details for the guardian at check-in. |
+   187→| `override_checkout` | OFF | Admins/Teachers may override checkout (with confirmation + note). |
+   188→| `older_sibling_collect` | OFF | Allow authorising an older sibling to collect a younger sibling. |
+   189→| `visitors_add_to_db` | ON (prompt) | Visitor flow offers "add to regular database" checkbox. |
+   190→| `working_with_children_tracking` | ON | Track WWCC / Blue Card status for volunteers. |
+   191→| `audit_log_detailed` | ON | Verbose audit logging. |
+   192→| `scheduled_backups` | OFF | Automated encrypted backups on a schedule. |
+   193→
+   194→---
+   195→
+   196→## 7. Staged Delivery Plan
+   197→
+   198→Each stage is independently shippable and demoable. Stages are grouped into **Phases**.
+   199→
+   200→> **Naming:** "Sabbath School" is the default program-term in code/constants, overridable to "Sunday School" / "Unit" / etc. via branding config. We never hardcode "Sunday School" as the label.
+   201→
+   202→---
+   203→
+   204→### PHASE A — Foundation
+   205→
+   206→#### Stage 0 — Project scaffold & architecture
+   207→- Folder structure: `src/app/(kiosk)`, `src/app/(admin)`, `src/app/(volunteer)`, `src/app/(guardian)`, `src/app/api`, `src/lib`, `src/components/domain/*`.
+   208→- Prisma baseline + `db` client.
+   209→- Tailwind theme tokens (branding-driven CSS variables).
+   210→- PWA manifest + service worker shell.
+   211→- Caddy gateway confirmation; dev server running.
+   212→- **Deliverable:** blank themed shell with working nav, installable as PWA.
+   213→
+   214→#### Stage 1 — Auth, Users, RBAC
+   215→- NextAuth credentials provider (email/username + password; PIN login for kiosk/guardian).
+   216→- User ↔ Person link model (a User is always backed by a Person).
+   217→- Role + Permission matrix + server-side guard helpers (`requirePermission`).
+   218→- First-run setup wizard: create Organisation + first Admin (linked to a Person).
+   219→- Login, logout, session, idle timeout.
+   220→- **Deliverable:** can log in as Admin; can promote a Person to Teacher/Volunteer/Kiosk/Security.
+   221→
+   222→#### Stage 2 — Organisation, branding & feature toggles
+   223→- Organisation singleton (name, logo, colours, terminology overrides).
+   224→- FeatureFlags table + Admin UI for every toggle in §6.
+   225→- Branding flows into theme + manifest + printed labels.
+   226→- Terminology resolver (e.g. `t('program.sabbath_school')` → "Sabbath School" or "Sunday School").
+   227→- **Deliverable:** a second organisation (e.g. a Scouts troop) could install, rebrand, and rename "Sabbath School" → "Unit" entirely from the dashboard.
+   228→
+   229→---
+   230→
+   231→### PHASE B — The World (people, programs, places)
+   232→
+   233→#### Stage 3 — People & Families
+   234→- Person CRUD (Adult/Child), type-specific fields.
+   235→- Family CRUD, PrimaryCarer + Child memberships.
+   236→- Photos (upload, encrypted storage, optional per toggle).
+   237→- Medical/allergy fields (visibility scoped by role).
+   238→- WorkingWithChildrenCard tracking.
+   239→- Visitors / first-time flag on Person.
+   240→- Search + list (paginated) for People Managers.
+   241→- **Deliverable:** Admin/PeopleManager can build the whole people/family graph.
+   242→
+   243→#### Stage 4 — Authorised Guardians, Blacklist, Older-sibling
+   244→- AuthorisedGuardian: link an Adult Person (possibly from another Family) to a Family with sign-in/out rights but **no edit rights** on that family's data.
+   245→- BlacklistEntry: Person/free-text blocked from collecting a child; surfaced as a hard stop at checkout.
+   246→- OlderSiblingAuthorisation (gated by toggle): mark an older sibling Person as allowed to collect a younger sibling.
+   247→- **Deliverable:** a grandparent who is themselves a primary carer of their own family can be added as an Authorised Guardian to their child's family.
+   248→
+   249→#### Stage 5 — Programs, Classes, Events, Rooms
+   250→- Program CRUD (Sabbath School, Pathfinders, Adventurers, Community Childcare, Custom).
+   251→- Group/Class CRUD within a Program; assign to Room + Schedule.
+   252→- Event CRUD (one-off / occasional); can borrow rooms/classes or define ad-hoc.
+   253→- Schedule model (recurring day-of-week + time, or ad-hoc date/time).
+   254→- **Deliverable:** Admin can model "Sabbath School with Beginner/Kindergarten/Primary/Juniors classes, meeting Saturdays 9:30am, in Rooms 1–4" and "Pathfinders Club meeting Wed 7pm in the Hall".
+   255→
+   256→---
+   257→
+   258→### PHASE C — The Kiosk & Check-In/Out (the heart of the system)
+   259→
+   260→#### Stage 6 — Kiosk shell & search
+   261→- Kiosk route group `(kiosk)` with fullscreen, touch-friendly UI.
+   262→- Open mode vs locked mode (per `kiosk_requires_login`).
+   263→- Universal search across name, surname, phone, email (rate-limited, no partial-data leakage).
+   264→- Family selection → family summary card (carers, children, alerts).
+   265→- Idle reset back to search after configurable timeout.
+   266→- **Deliverable:** a tablet can be set up as a kiosk and a guardian can find their family.
+   267→
+   268→#### Stage 7 — Check-In flow
+   269→- Select Program/Class/Event + Session (today's session auto-suggested).
+   270→- Multi-child selection with checkboxes/sliders (no dropdown-per-child).
+   271→- Allergy/medical alerts surfaced prominently per child.
+   272→- Authorised-guardian flow: guardian signs in with PIN/password (if `guardian_pin_signin` ON) → can act for the family.
+   273→- Generate **DailyCode** (3-digit, per family per day) — shown on screen, visible to all carers/guardians of that family who sign in.
+   274→- Optional label printing (`print_name_labels`) + optional signout-code slip printing (`print_signout_code`).
+   275→- Visitor quick-add flow with "add to regular DB" checkbox (per `visitors_add_to_db`).
+   276→- Write CheckInRecord + AuditLog.
+   277→- **Deliverable:** a guardian can check in 3 children across 2 rooms in under 20 seconds and walk away with a code + labels.
+   278→
+   279→#### Stage 8 — Check-Out flow
+   280→- Three checkout methods:
+   281→  1. **Code** — enter the family's daily 3-digit code → quick sign-out of some/all children (checkboxes).
+   282→  2. **PIN** — guardian PIN/password → sign-out.
+   283→  3. **Override** — Admin/Teacher only (per `override_checkout`): mandatory confirmation checkbox + free-text note → OverrideCheckoutLog.
+   284→- Photo verification display (per `photo_verification`): show child photo + collector photo for visual match.
+   285→- Blacklist hard-stop: if the collector matches a BlacklistEntry, block + alert Security.
+   286→- Older-sibling collection (per `older_sibling_collect`): allow if authorised.
+   287→- Write CheckOutRecord + AuditLog.
+   288→- **Deliverable:** the daily code works for fast checkout; override is audited; blacklist blocks.
+   289→
+   290→---
+   291→
+   292→### PHASE D — Operations
+   293→
+   294→#### Stage 9 — Volunteer / Teacher Dashboard
+   295→- Route group `(volunteer)` for Teachers/Volunteers/Security.
+   296→- Live room roster (Socket.io realtime) — who's checked in to my room right now.
+   297→- Headcount log — enter a count, system compares to check-in count, flags discrepancies.
+   298→- Manual check-in/out (with reason).
+   299→- Override checkout UI (same rules as kiosk override).
+   300→- Reports: attendance for my room/class/session; print or email.
+   301→- **Deliverable:** a teacher with a tablet sees their roster update live and can close out the session.
+   302→
+   303→#### Stage 10 — Reporting & Analytics
+   304→- Attendance reports (by program/class/date range/person).
+   305→- Headcount trend charts.
+   306→- Volunteer hours (from check-in/out of volunteer Users).
+   307→- First-time/visitor follow-up report.
+   308→- WWCC expiry report.
+   309→- Export any report to PDF/CSV; email from the dashboard.
+   310→- **Deliverable:** Admin can pull "Sabbath School attendance Q1 2025 by class" as a PDF.
+   311→
+   312→#### Stage 11 — Printing subsystem
+   313→- Printer CRUD (name, driver, default queue).
+   314→- Assign printers to Rooms/Areas/Classes.
+   315→- Label template editor (child name, class, room, code, date, allergy icon).
+   316→- Signout-code slip template.
+   317→- Print via QZ Tray (recommended) or browser print fallback.
+   318→- **Deliverable:** check-in at Room 1's kiosk prints on Room 1's label printer.
+   319→
+   320→---
+   321→
+   322→### PHASE E — Data lifecycle
+   323→
+   324→#### Stage 12 — Import / Export
+   325→- CSV/Excel import for People + Families (with template downloads + validation preview).
+   326→- CSV/Excel export of any list (people, families, attendance, audit).
+   327→- Dry-run + rollback on import errors.
+   328→- **Deliverable:** migrate an existing Rock/Elvanto export into the system.
+   329→
+   330→#### Stage 13 — Backup / Restore
+   331→- Manual "Backup now" → downloads an encrypted `.cbak` bundle (DB + photos + config).
+   332→- Scheduled backups (per `scheduled_backups`) → write to `./data/backups/` with retention.
+   333→- Restore workflow: upload `.cbak`, verify, confirm, restore (with automatic pre-restore backup).
+   334→- **Deliverable:** an org can move the whole system to new hardware via backup → restore.
+   335→
+   336→---
+   337→
+   338→### PHASE F — Deployment & Hardening
+   339→
+   340→#### Stage 14 — PWA polish & offline
+   341→- Service worker: precache kiosk shell + branding; runtime cache for family search results.
+   342→- Offline queue for check-in/out writes (resync on reconnect).
+   343→- "Install app" prompts + install instructions per platform.
+   344→- **Deliverable:** kiosk keeps checking children in during a network outage and resyncs after.
+   345→
+   346→#### Stage 15 — Deployment & installation
+   347→- `Dockerfile` + `docker-compose.yml` (with volumes, env, healthcheck).
+   348→- Bun standalone binary build script (`bun build --compile`) for linux-x64, linux-arm64, macos-arm64, windows-x64.
+   349→- Install scripts:
+   350→  - `install/install-linux.sh` (systemd unit, creates service user, sets perms).
+   351→  - `install/install-macos.sh` (launchd plist).
+   352→  - `install/install-windows.ps1` (winsw service).
+   353→  - `install/install-nas-synology.sh` (DSM scheduled task).
+   354→- `/docs/deployment/` markdown guides per platform.
+   355→- First-run setup wizard (Org + Admin) on first launch.
+   356→- **Deliverable:** `curl … | bash` on a fresh Linux box, or `docker compose up`, yields a running system.
+   357→
+   358→#### Stage 16 — Security hardening & audit
+   359→- Encryption-at-rest for photos + backups (AES-256-GCM, rotatable master key).
+   360→- Tamper-evident audit log (chained hashes).
+   361→- Login + search rate limiting.
+   362→- Security hardening guide (firewall, TLS, service user, file perms).
+   363→- Optional LAN-only mode (bind to interface, no external exposure).
+   364→- **Deliverable:** passes a basic security checklist; audit log is verifiable.
+   365→
+   366→---
+   367→
+   368→### PHASE G — Future (designed-for, not built-now)
+   369→
+   370→These are explicitly **out of scope for the initial build** but the schema/APIs will be shaped to accept them:
+   371→
+   372→- **F-1** Two-factor authentication (TOTP) for Users.
+   373→- **F-2** QR-code check-in/out — per-family unique QR for pre-check; guardian scans at kiosk.
+   374→- **F-3** External system integration — Rock RMS / Elvanto / Planning Center import connectors; export to CSV/JSON for comms tools.
+   375→- **F-4** Parent/Carer communication — in-app messages + optional email/SMS (SMTP/Twilio gateway configurable).
+   376→- **F-5** Multi-site support — several congregations/branches sharing one install with scoped data.
+   377→- **F-6** Multi-language UI (i18n already scaffolded via next-intl).
+   378→
+   379→---
+   380→
+   381→## 8. Requirements Traceability
+   382→
+   383→Mapping the user's explicit requirements to stages, so nothing is missed.
+   384→
+   385→| Requirement (paraphrased) | Stage |
+   386→|---------------------------|-------|
+   387→| Families, Groups, Types for Sabbath School | S3, S5 |
+   388→| Security roles for volunteers | S1, S9 |
+   389→| Authorised guardians | S4 |
+   390→| Security (hardening) | S16 |
+   391→| Photo verification | S3 (photos), S8 (verification UI), toggle S2 |
+   392→| Kiosk mode | S6 |
+   393→| Mobile check-in | S6, S14 (PWA) |
+   394→| Allergy/medical alerts | S3 (fields), S7 (surfaced) |
+   395→| Multi-room check-in | S5 (rooms), S7 |
+   396→| Volunteer workflows | S9 |
+   397→| Self-hosted, cross-platform | S15 |
+   398→| Web app installable on phone/tablet/desktop | S0 (PWA shell), S14 |
+   399→| Secure (child data) | S1, S16 |
+   400→| Sabbath School / Pathfinders / Adventurers / community childcare / custom programs | S5 |
+   401→| One-off/occasional Events | S5 |
+   402→| Visitors/First-timers with add-to-DB option | S7 (toggle S2) |
+   403→| Branding/config dashboard for other orgs | S2 |
+   404→| Email as recovery option (toggleable) + as contact | S2 (toggle), S3 (contact field) |
+   405→| Self-register/self-manage with PIN/password (toggleable) | S2 (toggle), S1 (auth), S3 |
+   406→| Adult-only fields vs child-only fields | S3 |
+   407→| Add/remove Authorised Guardians (grandparents etc.) | S4 |
+   408→| Blacklist | S4 |
+   409→| Authorised Guardian may belong to own Family | S4 |
+   410→| Toggle: carer/guardian PIN sign-in | S2 (toggle), S7 |
+   411→| Easy multi-child sign in/out (checkboxes/sliders) | S7, S8 |
+   412→| Random 3-digit daily code, visible to all carers/guardians | S7 |
+   413→| Code works even if guardian PIN sign-in is disabled | S7 (code is independent of PIN) |
+   414→| Users (Admin/Teacher/Volunteer/Kiosk) linked from PEOPLE, shared credentials | S1 |
+   415→| Kiosk: straight-to-use OR require Kiosk Account login (toggle) | S2 (toggle), S6 |
+   416→| Override checkout for Admins/Teachers (toggle) with confirmation + note | S2 (toggle), S8, S9 |
+   417→| Kiosk SEARCH across name/surname/phone/email | S6 |
+   418→| Toggle: print name label | S2 (toggle), S7, S11 |
+   419→| Toggle: print signout code + details | S2 (toggle), S7, S11 |
+   420→| Printer/queue config assigned to areas/classrooms | S11 |
+   421→| Toggle: photo for adult + child, used at checkout verification | S2 (toggle), S3, S8 |
+   422→| Older sibling authorised to collect younger (toggle) | S2 (toggle), S4, S8 |
+   423→| Teacher/Volunteer dashboard: live rosters, headcounts, manual checkout, reports | S9, S10 |
+   424→| Data Import/Export | S12 |
+   425→| Backup/Restore | S13 |
+   426→| Native install scripts (Linux/Win/Mac/NAS) + Docker | S15 |
+   427→| Future: 2FA, external integrations, QR check-in/out, parent comms | F-1…F-4 |
+   428→| Working with Children cards (Blue Card etc., national + international) | S3 |
+   429→
+   430→---
+   431→
+   432→## 9. Development Conventions
+   433→
+   434→- **Frontend first per stage:** build the UI so the user can see progress, then wire the API routes + Prisma.
+   435→- **API routes** (not server actions) for all data mutations.
+   436→- **Prisma schema** evolves stage-by-stage; `bun run db:push` after each schema change.
+   437→- **shadcn/ui** for all UI primitives; domain components in `src/components/domain/`.
+   438→- **Sticky footer** on every layout (`min-h-screen flex flex-col`, `mt-auto` footer).
+   439→- **Responsive + accessible** (ARIA, keyboard, 44px touch targets) from day one.
+   440→- **Self-verification:** after each stage, use Agent Browser to confirm the page renders and the golden path works before declaring done.
+   441→
+   442→---
+   443→
+   444→## 10. How We'll Build It
+   445→
+   446→1. This plan is reviewed and approved.
+   447→2. We execute **Stage 0 → Stage 16** in order (with parallel sub-stages where safe).
+   448→3. After each stage: demo to user → fix → mark complete → proceed.
+   449→4. Phase G (future) items are parked; schema/APIs are shaped to accept them later without rework.
+   450→
+   451→---
+   452→
+   453→## 11. Open Questions for the User (to confirm before Stage 0)
+   454→
+   455→1. **Terminology defaults** — confirm default term is "Sabbath School" with override to "Sunday School"/"Unit"/etc. ✔ (assumed yes)
+   456→2. **DB engine** — ship SQLite by default (recommended for self-hosted/NAS), with documented Postgres swap? ✔ (assumed yes)
+   457→3. **Print tech** — QZ Tray (Java tray app, very reliable for label printers) as primary, browser-print as fallback? ✔ (assumed yes)
+   458→4. **Daily code scope** — per **family per day** (shared by all that family's carers/guardians), regenerated each calendar day? ✔ (assumed yes per your description)
+   459→5. **Kiosk Account** — a dedicated role `Kiosk` (a User linked to a Person, or a non-Person system account)? Assumed: a **User with role Kiosk**, optionally linked to a Person. ✔
+   460→6. **Photo storage** — encrypted files on disk under `./data/photos/` (not in DB blob)? ✔ (assumed yes)
+   461→7. **Multi-org** — single organisation per install for now (multi-site is F-5)? ✔ (assumed yes)
+   462→
+   463→If any assumption above is wrong, flag it and we'll adjust the plan before Stage 0.
+   464→

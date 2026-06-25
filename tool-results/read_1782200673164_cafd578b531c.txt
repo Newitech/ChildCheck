@@ -1,0 +1,713 @@
+     1→"use client";
+     2→
+     3→import { useEffect, useRef, useState } from "react";
+     4→import Link from "next/link";
+     5→import { useRouter } from "next/navigation";
+     6→import { toast } from "sonner";
+     7→import {
+     8→  AlertTriangle,
+     9→  Calendar,
+    10→  CheckCircle2,
+    11→  Loader2,
+    12→  Mail,
+    13→  PencilLine,
+    14→  Phone,
+    15→  Trash2,
+    16→  Upload,
+    17→  UserCircle2,
+    18→  X,
+    19→} from "lucide-react";
+    20→
+    21→import { useTerminology } from "@/hooks/use-terminology";
+    22→import { Button } from "@/components/ui/button";
+    23→import { Input } from "@/components/ui/input";
+    24→import { Label } from "@/components/ui/label";
+    25→import { Textarea } from "@/components/ui/textarea";
+    26→import { Badge } from "@/components/ui/badge";
+    27→import {
+    28→  Card,
+    29→  CardContent,
+    30→  CardDescription,
+    31→  CardHeader,
+    32→  CardTitle,
+    33→} from "@/components/ui/card";
+    34→import {
+    35→  Select,
+    36→  SelectContent,
+    37→  SelectItem,
+    38→  SelectTrigger,
+    39→  SelectValue,
+    40→} from "@/components/ui/select";
+    41→import {
+    42→  AlertDialog,
+    43→  AlertDialogAction,
+    44→  AlertDialogCancel,
+    45→  AlertDialogContent,
+    46→  AlertDialogDescription,
+    47→  AlertDialogFooter,
+    48→  AlertDialogHeader,
+    49→  AlertDialogTitle,
+    50→  AlertDialogTrigger,
+    51→} from "@/components/ui/alert-dialog";
+    52→import { PersonForm } from "../person-form";
+    53→import type { PersonDetailDTO, WwccCardDTO } from "@/lib/people";
+    54→import { PersonGuardianFamiliesSection } from "./guardian-families-section";
+    55→import { PersonCollectionPermissionsSection } from "./collection-permissions-section";
+    56→
+    57→interface Props {
+    58→  personId: string;
+    59→  wwccEnabled: boolean;
+    60→  initial: PersonDetailDTO;
+    61→}
+    62→
+    63→const WWCC_STATUSES = ["Pending", "Verified", "Expired", "Cancelled"] as const;
+    64→const WWCC_TYPES = [
+    65→  "QLD Blue Card",
+    66→  "NSW WWCC",
+    67→  "VIC WWCC",
+    68→  "ACT WWVP",
+    69→  "SA DHS",
+    70→  "WA WWC",
+    71→  "Tas WWCC",
+    72→  "NT Ochre Card",
+    73→  "NZ Police Vet",
+    74→  "International",
+    75→  "Other",
+    76→];
+    77→
+    78→export function PersonDetail({ personId, wwccEnabled, initial }: Props) {
+    79→  const router = useRouter();
+    80→  const { t } = useTerminology();
+    81→  const [data, setData] = useState<PersonDetailDTO>(initial);
+    82→  const [editOpen, setEditOpen] = useState(false);
+    83→  const [photoCacheBust, setPhotoCacheBust] = useState(0);
+    84→  const [uploading, setUploading] = useState(false);
+    85→  const fileInputRef = useRef<HTMLInputElement>(null);
+    86→
+    87→  // WWCC add-form state
+    88→  const [cardType, setCardType] = useState<string>(WWCC_TYPES[0]);
+    89→  const [cardNumber, setCardNumber] = useState("");
+    90→  const [jurisdiction, setJurisdiction] = useState("");
+    91→  const [status, setStatus] = useState<(typeof WWCC_STATUSES)[number]>("Pending");
+    92→  const [expiresAt, setExpiresAt] = useState("");
+    93→  const [wwccSaving, setWwccSaving] = useState(false);
+    94→
+    95→  const refresh = async () => {
+    96→    try {
+    97→      const res = await fetch(`/api/admin/people/${personId}`, {
+    98→        cache: "no-store",
+    99→      });
+   100→      if (!res.ok) throw new Error(`status ${res.status}`);
+   101→      const d = (await res.json()) as PersonDetailDTO;
+   102→      setData(d);
+   103→      setPhotoCacheBust((n) => n + 1);
+   104→    } catch (e) {
+   105→      toast.error("Failed to refresh", {
+   106→        description: e instanceof Error ? e.message : undefined,
+   107→      });
+   108→    }
+   109→  };
+   110→
+   111→  useEffect(() => {
+   112→    // nothing — initial state already set from server
+   113→  }, []);
+   114→
+   115→  const handlePhotoUpload = async (file: File) => {
+   116→    setUploading(true);
+   117→    try {
+   118→      const form = new FormData();
+   119→      form.append("file", file);
+   120→      const res = await fetch(`/api/admin/people/${personId}/photo`, {
+   121→        method: "POST",
+   122→        body: form,
+   123→      });
+   124→      if (!res.ok) {
+   125→        const err = await res.json().catch(() => ({}));
+   126→        throw new Error(err.error ?? `status ${res.status}`);
+   127→      }
+   128→      setPhotoCacheBust((n) => n + 1);
+   129→      toast.success("Photo uploaded");
+   130→    } catch (e) {
+   131→      toast.error("Photo upload failed", {
+   132→        description: e instanceof Error ? e.message : undefined,
+   133→      });
+   134→    } finally {
+   135→      setUploading(false);
+   136→    }
+   137→  };
+   138→
+   139→  const handlePhotoRemove = async () => {
+   140→    setUploading(true);
+   141→    try {
+   142→      const res = await fetch(`/api/admin/people/${personId}/photo`, {
+   143→        method: "DELETE",
+   144→      });
+   145→      if (!res.ok) {
+   146→        const err = await res.json().catch(() => ({}));
+   147→        throw new Error(err.error ?? `status ${res.status}`);
+   148→      }
+   149→      setPhotoCacheBust((n) => n + 1);
+   150→      toast.success("Photo removed");
+   151→    } catch (e) {
+   152→      toast.error("Failed to remove photo", {
+   153→        description: e instanceof Error ? e.message : undefined,
+   154→      });
+   155→    } finally {
+   156→      setUploading(false);
+   157→    }
+   158→  };
+   159→
+   160→  const handleAddWwcc = async () => {
+   161→    setWwccSaving(true);
+   162→    try {
+   163→      const res = await fetch(`/api/admin/people/${personId}/wwcc`, {
+   164→        method: "POST",
+   165→        headers: { "Content-Type": "application/json" },
+   166→        body: JSON.stringify({
+   167→          cardType,
+   168→          cardNumber: cardNumber.trim() || null,
+   169→          jurisdiction: jurisdiction.trim() || null,
+   170→          status,
+   171→          expiresAt: expiresAt
+   172→            ? new Date(expiresAt + "T00:00:00Z").toISOString()
+   173→            : null,
+   174→        }),
+   175→      });
+   176→      if (!res.ok) {
+   177→        const err = await res.json().catch(() => ({}));
+   178→        throw new Error(err.error ?? `status ${res.status}`);
+   179→      }
+   180→      setCardNumber("");
+   181→      setJurisdiction("");
+   182→      setExpiresAt("");
+   183→      setStatus("Pending");
+   184→      toast.success("WWCC card added");
+   185→      await refresh();
+   186→    } catch (e) {
+   187→      toast.error("Failed to add WWCC card", {
+   188→        description: e instanceof Error ? e.message : undefined,
+   189→      });
+   190→    } finally {
+   191→      setWwccSaving(false);
+   192→    }
+   193→  };
+   194→
+   195→  const handleUpdateWwccStatus = async (card: WwccCardDTO, newStatus: string) => {
+   196→    try {
+   197→      const res = await fetch(`/api/admin/wwcc/${card.id}`, {
+   198→        method: "PUT",
+   199→        headers: { "Content-Type": "application/json" },
+   200→        body: JSON.stringify({ status: newStatus }),
+   201→      });
+   202→      if (!res.ok) {
+   203→        const err = await res.json().catch(() => ({}));
+   204→        throw new Error(err.error ?? `status ${res.status}`);
+   205→      }
+   206→      toast.success(`Card marked ${newStatus}`);
+   207→      await refresh();
+   208→    } catch (e) {
+   209→      toast.error("Failed to update card", {
+   210→        description: e instanceof Error ? e.message : undefined,
+   211→      });
+   212→    }
+   213→  };
+   214→
+   215→  const handleDeleteWwcc = async (card: WwccCardDTO) => {
+   216→    try {
+   217→      const res = await fetch(`/api/admin/wwcc/${card.id}`, {
+   218→        method: "DELETE",
+   219→      });
+   220→      if (!res.ok) {
+   221→        const err = await res.json().catch(() => ({}));
+   222→        throw new Error(err.error ?? `status ${res.status}`);
+   223→      }
+   224→      toast.success("Card removed");
+   225→      await refresh();
+   226→    } catch (e) {
+   227→      toast.error("Failed to remove card", {
+   228→        description: e instanceof Error ? e.message : undefined,
+   229→      });
+   230→    }
+   231→  };
+   232→
+   233→  const handleArchive = async () => {
+   234→    try {
+   235→      const res = await fetch(`/api/admin/people/${personId}`, {
+   236→        method: "DELETE",
+   237→      });
+   238→      if (!res.ok) {
+   239→        const err = await res.json().catch(() => ({}));
+   240→        throw new Error(err.error ?? `status ${res.status}`);
+   241→      }
+   242→      toast.success("Person archived");
+   243→      router.push("/admin/people");
+   244→      router.refresh();
+   245→    } catch (e) {
+   246→      toast.error("Failed to archive", {
+   247→        description: e instanceof Error ? e.message : undefined,
+   248→      });
+   249→    }
+   250→  };
+   251→
+   252→  const ageYears = data.dateOfBirth
+   253→    ? (() => {
+   254→        const dob = new Date(data.dateOfBirth);
+   255→        const now = new Date();
+   256→        let age = now.getFullYear() - dob.getFullYear();
+   257→        const m = now.getMonth() - dob.getMonth();
+   258→        if (m < 0 || (m === 0 && now.getDate() < dob.getDate())) age--;
+   259→        return age >= 0 ? age : null;
+   260→      })()
+   261→    : null;
+   262→
+   263→  return (
+   264→    <div className="space-y-6">
+   265→      {/* Top: avatar + name + badges */}
+   266→      <Card>
+   267→        <CardContent className="py-6 flex flex-col sm:flex-row gap-6 items-start">
+   268→          <div className="flex flex-col items-center gap-3">
+   269→            <img
+   270→              key={photoCacheBust}
+   271→              src={`/api/people/${personId}/photo?cb=${photoCacheBust}`}
+   272→              alt={`Photo of ${data.firstName} ${data.lastName}`}
+   273→              className="h-32 w-32 rounded-lg border object-cover bg-muted"
+   274→            />
+   275→            <input
+   276→              ref={fileInputRef}
+   277→              type="file"
+   278→              accept="image/png,image/jpeg,image/webp"
+   279→              className="hidden"
+   280→              onChange={(e) => {
+   281→                const f = e.target.files?.[0];
+   282→                if (f) void handlePhotoUpload(f);
+   283→                e.target.value = "";
+   284→              }}
+   285→            />
+   286→            <div className="flex flex-col gap-2 w-full">
+   287→              <Button
+   288→                type="button"
+   289→                variant="outline"
+   290→                size="sm"
+   291→                disabled={uploading}
+   292→                onClick={() => fileInputRef.current?.click()}
+   293→              >
+   294→                {uploading ? (
+   295→                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+   296→                ) : (
+   297→                  <Upload className="mr-1.5 h-4 w-4" />
+   298→                )}
+   299→                Upload
+   300→              </Button>
+   301→              {data.hasPhoto && (
+   302→                <Button
+   303→                  type="button"
+   304→                  variant="ghost"
+   305→                  size="sm"
+   306→                  disabled={uploading}
+   307→                  onClick={() => void handlePhotoRemove()}
+   308→                >
+   309→                  <Trash2 className="mr-1.5 h-4 w-4" /> Remove
+   310→                </Button>
+   311→              )}
+   312→            </div>
+   313→          </div>
+   314→
+   315→          <div className="flex-1 space-y-3 min-w-0">
+   316→            <div>
+   317→              <h2 className="text-xl font-semibold">
+   318→                {data.firstName} {data.lastName}
+   319→              </h2>
+   320→              {data.preferredName && (
+   321→                <p className="text-sm text-muted-foreground">
+   322→                  Goes by &ldquo;{data.preferredName}&rdquo;
+   323→                </p>
+   324→              )}
+   325→              <div className="flex flex-wrap gap-1.5 mt-2">
+   326→                <Badge variant={data.personType === "Child" ? "default" : "secondary"}>
+   327→                  {data.personType === "Child" ? t("child") : "Adult"}
+   328→                </Badge>
+   329→                {data.isVisitor && <Badge variant="outline">Visitor</Badge>}
+   330→                {data.hasUser && <Badge variant="outline">Has login</Badge>}
+   331→                {!data.isActive && <Badge variant="destructive">Archived</Badge>}
+   332→              </div>
+   333→            </div>
+   334→
+   335→            {ageYears !== null && (
+   336→              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+   337→                <Calendar className="h-4 w-4" />
+   338→                Born {new Date(data.dateOfBirth!).toLocaleDateString()} (age {ageYears})
+   339→              </div>
+   340→            )}
+   341→
+   342→            <div className="flex flex-wrap gap-4 text-sm">
+   343→              {data.email && (
+   344→                <div className="flex items-center gap-1.5">
+   345→                  <Mail className="h-4 w-4 text-muted-foreground" />
+   346→                  <a href={`mailto:${data.email}`} className="hover:underline">
+   347→                    {data.email}
+   348→                  </a>
+   349→                </div>
+   350→              )}
+   351→              {data.phone && (
+   352→                <div className="flex items-center gap-1.5">
+   353→                  <Phone className="h-4 w-4 text-muted-foreground" />
+   354→                  <a href={`tel:${data.phone}`} className="hover:underline">
+   355→                    {data.phone}
+   356→                  </a>
+   357→                </div>
+   358→              )}
+   359→              {!data.email && !data.phone && (
+   360→                <div className="text-xs text-muted-foreground">No contact details</div>
+   361→              )}
+   362→            </div>
+   363→
+   364→            {data.schoolGrade && (
+   365→              <p className="text-sm text-muted-foreground">
+   366→                School grade: <span className="font-medium text-foreground">{data.schoolGrade}</span>
+   367→              </p>
+   368→            )}
+   369→            {data.gender && (
+   370→              <p className="text-sm text-muted-foreground">
+   371→                Gender: <span className="font-medium text-foreground">{data.gender}</span>
+   372→              </p>
+   373→            )}
+   374→            {(data.emergencyContactName || data.emergencyContactPhone) && (
+   375→              <p className="text-sm text-muted-foreground">
+   376→                Emergency contact:{" "}
+   377→                <span className="font-medium text-foreground">
+   378→                  {data.emergencyContactName ?? "—"}
+   379→                  {data.emergencyContactPhone && ` (${data.emergencyContactPhone})`}
+   380→                </span>
+   381→              </p>
+   382→            )}
+   383→
+   384→            <div className="flex flex-wrap gap-2 pt-2">
+   385→              <Button size="sm" onClick={() => setEditOpen(true)}>
+   386→                <PencilLine className="mr-1.5 h-4 w-4" /> Edit
+   387→              </Button>
+   388→              <AlertDialog>
+   389→                <AlertDialogTrigger asChild>
+   390→                  <Button size="sm" variant="outline">
+   391→                    <Trash2 className="mr-1.5 h-4 w-4" /> Archive
+   392→                  </Button>
+   393→                </AlertDialogTrigger>
+   394→                <AlertDialogContent>
+   395→                  <AlertDialogHeader>
+   396→                    <AlertDialogTitle>Archive this person?</AlertDialogTitle>
+   397→                    <AlertDialogDescription>
+   398→                      Soft-deletes the record (isActive=false). The person will
+   399→                      disappear from the default list but remain in the database
+   400→                      for audit and child-safety purposes.
+   401→                    </AlertDialogDescription>
+   402→                  </AlertDialogHeader>
+   403→                  <AlertDialogFooter>
+   404→                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+   405→                    <AlertDialogAction onClick={() => void handleArchive()}>
+   406→                      Archive
+   407→                    </AlertDialogAction>
+   408→                  </AlertDialogFooter>
+   409→                </AlertDialogContent>
+   410→              </AlertDialog>
+   411→            </div>
+   412→          </div>
+   413→        </CardContent>
+   414→      </Card>
+   415→
+   416→      <div className="grid lg:grid-cols-2 gap-6">
+   417→        {/* Family memberships */}
+   418→        <Card>
+   419→          <CardHeader>
+   420→            <CardTitle className="text-base flex items-center gap-2">
+   421→              <UserCircle2 className="h-4 w-4" /> {t("family_plural")}
+   422→            </CardTitle>
+   423→            <CardDescription>
+   424→              {t("family_plural")} this person belongs to.
+   425→            </CardDescription>
+   426→          </CardHeader>
+   427→          <CardContent>
+   428→            {data.familyMemberships.length === 0 ? (
+   429→              <p className="text-sm text-muted-foreground">
+   430→                Not a member of any {t("family").toLowerCase()} yet.{" "}
+   431→                <Link href="/admin/families" className="text-primary hover:underline">
+   432→                  Add to a {t("family").toLowerCase()} →
+   433→                </Link>
+   434→              </p>
+   435→            ) : (
+   436→              <ul className="space-y-2">
+   437→                {data.familyMemberships.map((m) => (
+   438→                  <li
+   439→                    key={m.familyId}
+   440→                    className="flex items-center justify-between gap-3 rounded-md border p-2"
+   441→                  >
+   442→                    <div className="min-w-0">
+   443→                      <Link
+   444→                        href={`/admin/families/${m.familyId}`}
+   445→                        className="font-medium hover:underline"
+   446→                      >
+   447→                        {m.familyName}
+   448→                      </Link>
+   449→                      <p className="text-xs text-muted-foreground">Role: {m.role}</p>
+   450→                    </div>
+   451→                    <Badge variant="outline">{m.role}</Badge>
+   452→                  </li>
+   453→                ))}
+   454→              </ul>
+   455→            )}
+   456→          </CardContent>
+   457→        </Card>
+   458→
+   459→        {/* Medical / sensitive */}
+   460→        <Card className="border-destructive/30">
+   461→          <CardHeader>
+   462→            <CardTitle className="text-base flex items-center gap-2 text-destructive">
+   463→              <AlertTriangle className="h-4 w-4" /> Medical &amp; allergy
+   464→            </CardTitle>
+   465→            <CardDescription>
+   466→              Sensitive — visible to authorised roles only. Never returned in list views.
+   467→            </CardDescription>
+   468→          </CardHeader>
+   469→          <CardContent className="space-y-3 text-sm">
+   470→            <MedicalField label="Allergies" value={data.allergies} />
+   471→            <MedicalField label="Medical notes" value={data.medicalNotes} />
+   472→            <MedicalField label="Dietary notes" value={data.dietaryNotes} />
+   473→            {data.personType === "Adult" &&
+   474→              !data.allergies &&
+   475→              !data.medicalNotes &&
+   476→              !data.dietaryNotes && (
+   477→                <p className="text-xs text-muted-foreground">
+   478→                  No medical information on file.
+   479→                </p>
+   480→              )}
+   481→          </CardContent>
+   482→        </Card>
+   483→      </div>
+   484→
+   485→      {/* WWCC */}
+   486→      {wwccEnabled && (
+   487→        <Card>
+   488→          <CardHeader>
+   489→            <CardTitle className="text-base flex items-center gap-2">
+   490→              <CheckCircle2 className="h-4 w-4" /> Working with Children cards
+   491→            </CardTitle>
+   492→            <CardDescription>
+   493→              Blue Card / WWCC tracking. Disable in feature toggles to hide this section.
+   494→            </CardDescription>
+   495→          </CardHeader>
+   496→          <CardContent className="space-y-4">
+   497→            {data.wwccCards.length > 0 ? (
+   498→              <ul className="space-y-2">
+   499→                {data.wwccCards.map((c) => (
+   500→                  <li
+   501→                    key={c.id}
+   502→                    className="rounded-md border p-3 space-y-2"
+   503→                  >
+   504→                    <div className="flex items-start justify-between gap-3">
+   505→                      <div className="min-w-0">
+   506→                        <p className="font-medium">{c.cardType}</p>
+   507→                        <p className="text-xs text-muted-foreground">
+   508→                          {c.jurisdiction && <>{c.jurisdiction} · </>}
+   509→                          {c.cardNumber && <># {c.cardNumber} · </>}
+   510→                          {c.expiresAt && (
+   511→                            <>expires {new Date(c.expiresAt).toLocaleDateString()}</>
+   512→                          )}
+   513→                          {!c.expiresAt && <>no expiry set</>}
+   514→                        </p>
+   515→                        {c.verifiedAt && (
+   516→                          <p className="text-xs text-emerald-700 mt-0.5">
+   517→                            Verified {new Date(c.verifiedAt).toLocaleDateString()}
+   518→                          </p>
+   519→                        )}
+   520→                        {c.notes && (
+   521→                          <p className="text-xs text-muted-foreground mt-1">
+   522→                            {c.notes}
+   523→                          </p>
+   524→                        )}
+   525→                      </div>
+   526→                      <WwccBadge status={c.status} />
+   527→                    </div>
+   528→                    <div className="flex flex-wrap gap-2">
+   529→                      <Select
+   530→                        value={c.status}
+   531→                        onValueChange={(v) => void handleUpdateWwccStatus(c, v)}
+   532→                      >
+   533→                        <SelectTrigger className="h-8 w-[140px]" aria-label="Change status">
+   534→                          <SelectValue />
+   535→                        </SelectTrigger>
+   536→                        <SelectContent>
+   537→                          {WWCC_STATUSES.map((s) => (
+   538→                            <SelectItem key={s} value={s}>
+   539→                              Mark {s}
+   540→                            </SelectItem>
+   541→                          ))}
+   542→                        </SelectContent>
+   543→                      </Select>
+   544→                      <AlertDialog>
+   545→                        <AlertDialogTrigger asChild>
+   546→                          <Button variant="ghost" size="sm" className="text-destructive">
+   547→                            <X className="h-4 w-4" /> Remove
+   548→                          </Button>
+   549→                        </AlertDialogTrigger>
+   550→                        <AlertDialogContent>
+   551→                          <AlertDialogHeader>
+   552→                            <AlertDialogTitle>Remove this card?</AlertDialogTitle>
+   553→                            <AlertDialogDescription>
+   554→                              This permanently deletes the card record. This action cannot be undone.
+   555→                            </AlertDialogDescription>
+   556→                          </AlertDialogHeader>
+   557→                          <AlertDialogFooter>
+   558→                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+   559→                            <AlertDialogAction onClick={() => void handleDeleteWwcc(c)}>
+   560→                              Remove
+   561→                            </AlertDialogAction>
+   562→                          </AlertDialogFooter>
+   563→                        </AlertDialogContent>
+   564→                      </AlertDialog>
+   565→                    </div>
+   566→                  </li>
+   567→                ))}
+   568→              </ul>
+   569→            ) : (
+   570→              <p className="text-sm text-muted-foreground">
+   571→                No WWCC cards on file.
+   572→              </p>
+   573→            )}
+   574→
+   575→            {/* Add card form */}
+   576→            <div className="rounded-md border bg-muted/30 p-3 space-y-3">
+   577→              <p className="text-sm font-medium">Add a card</p>
+   578→              <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+   579→                <div className="space-y-1">
+   580→                  <Label className="text-xs">Card type</Label>
+   581→                  <Select value={cardType} onValueChange={setCardType}>
+   582→                    <SelectTrigger className="h-9">
+   583→                      <SelectValue />
+   584→                    </SelectTrigger>
+   585→                    <SelectContent>
+   586→                      {WWCC_TYPES.map((tt) => (
+   587→                        <SelectItem key={tt} value={tt}>
+   588→                          {tt}
+   589→                        </SelectItem>
+   590→                      ))}
+   591→                    </SelectContent>
+   592→                  </Select>
+   593→                </div>
+   594→                <div className="space-y-1">
+   595→                  <Label className="text-xs">Card number</Label>
+   596→                  <Input
+   597→                    value={cardNumber}
+   598→                    onChange={(e) => setCardNumber(e.target.value)}
+   599→                    className="h-9"
+   600→                  />
+   601→                </div>
+   602→                <div className="space-y-1">
+   603→                  <Label className="text-xs">Jurisdiction</Label>
+   604→                  <Input
+   605→                    value={jurisdiction}
+   606→                    onChange={(e) => setJurisdiction(e.target.value)}
+   607→                    placeholder="e.g. AU-QLD"
+   608→                    className="h-9"
+   609→                  />
+   610→                </div>
+   611→                <div className="space-y-1">
+   612→                  <Label className="text-xs">Status</Label>
+   613→                  <Select
+   614→                    value={status}
+   615→                    onValueChange={(v) => setStatus(v as typeof status)}
+   616→                  >
+   617→                    <SelectTrigger className="h-9">
+   618→                      <SelectValue />
+   619→                    </SelectTrigger>
+   620→                    <SelectContent>
+   621→                      {WWCC_STATUSES.map((s) => (
+   622→                        <SelectItem key={s} value={s}>
+   623→                          {s}
+   624→                        </SelectItem>
+   625→                      ))}
+   626→                    </SelectContent>
+   627→                  </Select>
+   628→                </div>
+   629→                <div className="space-y-1 sm:col-span-2 lg:col-span-1">
+   630→                  <Label className="text-xs">Expiry date</Label>
+   631→                  <Input
+   632→                    type="date"
+   633→                    value={expiresAt}
+   634→                    onChange={(e) => setExpiresAt(e.target.value)}
+   635→                    className="h-9"
+   636→                  />
+   637→                </div>
+   638→                <div className="flex items-end">
+   639→                  <Button
+   640→                    type="button"
+   641→                    size="sm"
+   642→                    className="h-9"
+   643→                    disabled={wwccSaving}
+   644→                    onClick={() => void handleAddWwcc()}
+   645→                  >
+   646→                    {wwccSaving ? (
+   647→                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+   648→                    ) : null}
+   649→                    Add card
+   650→                  </Button>
+   651→                </div>
+   652→              </div>
+   653→            </div>
+   654→          </CardContent>
+   655→        </Card>
+   656→      )}
+   657→
+   658→      <PersonForm
+   659→        open={editOpen}
+   660→        onOpenChange={setEditOpen}
+   661→        editing={{
+   662→          id: data.id,
+   663→          firstName: data.firstName,
+   664→          lastName: data.lastName,
+   665→          personType: data.personType,
+   666→        }}
+   667→        onSaved={() => {
+   668→          setEditOpen(false);
+   669→          void refresh();
+   670→          router.refresh();
+   671→        }}
+   672→      />
+   673→
+   674→      {/* Stage 4 — Adult: families where they're an AuthorisedGuardian */}
+   675→      {data.personType === "Adult" && (
+   676→        <PersonGuardianFamiliesSection personId={personId} />
+   677→      )}
+   678→
+   679→      {/* Stage 4 — Child: who is authorised / blocked to collect this child */}
+   680→      {data.personType === "Child" && (
+   681→        <PersonCollectionPermissionsSection personId={personId} />
+   682→      )}
+   683→    </div>
+   684→  );
+   685→}
+   686→
+   687→function MedicalField({ label, value }: { label: string; value: string | null }) {
+   688→  return (
+   689→    <div>
+   690→      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+   691→      {value ? (
+   692→        <Textarea
+   693→          readOnly
+   694→          value={value}
+   695→          className="mt-1 bg-background min-h-[60px] resize-y"
+   696→        />
+   697→      ) : (
+   698→        <p className="text-sm mt-0.5">—</p>
+   699→      )}
+   700→    </div>
+   701→  );
+   702→}
+   703→
+   704→function WwccBadge({ status }: { status: string }) {
+   705→  if (status === "Verified")
+   706→    return <Badge className="bg-emerald-100 text-emerald-900 hover:bg-emerald-200">{status}</Badge>;
+   707→  if (status === "Expired")
+   708→    return <Badge variant="destructive">{status}</Badge>;
+   709→  if (status === "Cancelled")
+   710→    return <Badge variant="outline">{status}</Badge>;
+   711→  return <Badge variant="secondary">{status}</Badge>;
+   712→}
+   713→

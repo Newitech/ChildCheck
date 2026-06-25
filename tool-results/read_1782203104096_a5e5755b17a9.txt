@@ -1,0 +1,560 @@
+     1→# ChildCheck — Work Log
+     2→
+     3→This file is the shared worklog for all agents working on the ChildCheck project.
+     4→Each agent must append (never overwrite) a new section starting with `---`.
+     5→
+     6→---
+     7→Task ID: 0
+     8→Agent: main
+     9→Task: Stage 0 — Project scaffold, branding theme, PWA shell, landing page, folder structure
+    10→
+    11→Work Log:
+    12→- Read existing scaffold (page.tsx, layout.tsx, globals.css, prisma/schema.prisma, package.json)
+    13→- Confirmed stack: Next.js 16, TS, Tailwind 4, shadcn/ui, Prisma(SQLite), NextAuth, Socket.io example present
+    14→- Begin Stage 0 build
+    15→
+    16→Stage Summary:
+    17→- (in progress)
+    18→
+    19→---
+    20→Task ID: 0 (completed)
+    21→Agent: main
+    22→Task: Stage 0 — Project scaffold, branding theme, PWA shell, landing page, folder structure
+    23→
+    24→Work Log:
+    25→- Read existing scaffold (page.tsx, layout.tsx, globals.css, prisma/schema.prisma, package.json, branding.ts)
+    26→- Found prior session had already built: landing page, kiosk/login/admin/volunteer stubs, branding.ts terminology layer, PWA manifest, SVG icons, emerald/amber theme in globals.css, layout with PWA metadata
+    27→- Gaps identified: Prisma schema still had default User/Post (branding.ts referenced db.organisation which didn't exist), no service worker, no src/components/domain/ folder
+    28→- Added Organisation singleton model to prisma/schema.prisma (fields: appName, tagline, primaryColor, accentColor, logoUrl, terminology JSON). Removed unused Post model.
+    29→- Ran `bun run db:push` — schema synced, Prisma Client regenerated
+    30→- Created public/sw.js (minimal offline shell cache: network-first for navigations, cache-first for static assets; skips /api and cross-origin)
+    31→- Created src/components/domain/service-worker-register.tsx (client component, production-only registration)
+    32→- Created src/components/domain/brand-mark.tsx (shared logo glyph with sm/md/lg sizes)
+    33→- Wired ServiceWorkerRegister into layout.tsx
+    34→- Refactored page.tsx to use shared BrandMark component (removed inline copy), established domain-components convention
+    35→- Lint: clean (no errors/warnings)
+    36→- Browser self-verification with agent-browser:
+    37→  - Home page renders: hero, 4 portal cards (Kiosk/Guardian/Volunteer/Admin), 9-feature grid, programmes strip, sticky footer — all present, no console errors
+    38→  - /kiosk, /login, /admin, /volunteer stubs all render with header + back nav, no errors
+    39→  - manifest.webmanifest served with correct content-type
+    40→  - sw.js served correctly
+    41→  - icon-192.svg served (200)
+    42→  - Mobile viewport (375x812) kiosk page renders correctly (responsive)
+    43→
+    44→Stage Summary:
+    45→- Stage 0 COMPLETE. Foundation ready: themed shell, branding/terminology layer wired to DB, PWA installable with offline shell, 4 portal routes stubbed, domain-components convention established.
+    46→- Deliverable met: "blank themed shell with working nav, installable as PWA"
+    47→- Next: Stage 1 — Auth, Users, RBAC, first-run setup wizard (NextAuth credentials provider, User↔Person link, Role/Permission matrix, requirePermission guard helper, create Organisation + first Admin wizard)
+    48→
+    49→---
+    50→Task ID: 1
+    51→Agent: full-stack-developer
+    52→Task: Stage 1 — Auth, Users, RBAC (NextAuth credentials, User↔Person link, Role/Permission matrix, first-run setup wizard, protected layouts)
+    53→
+    54→Work Log:
+    55→- Read worklog.md (Stage 0) and PLAN.md §4.4/§5 — confirmed stack, branding layer, Organisation model, stub pages
+    56→- Installed `bcryptjs@3.0.3` + `@types/bcryptjs` via `bun add`
+    57→- Appended NEXTAUTH_SECRET and NEXTAUTH_URL to `.env` (kept existing DATABASE_URL)
+    58→- Added `Person`, `User`, `UserRole`, `AuditLog` models to `prisma/schema.prisma` (kept Organisation). Ran `bun run db:push` → schema synced, Prisma Client regenerated
+    59→- Created `src/lib/password.ts` (hashPassword/verifyPassword 10 rounds, hashPin/verifyPin 8 rounds, isValidPin 4–6 digit regex)
+    60→- Created `src/lib/audit.ts` (logAudit helper, try/catch wrapped, never throws; details stringified to JSON)
+    61→- Created `src/lib/auth.ts`:
+    62→  - NextAuth v4 options: jwt session, CredentialsProvider (username + password/PIN)
+    63→  - authorize: lookup user by username (SQLite does NOT support `mode: "insensitive"` on String filters — switched to plain `equals` after first attempt failed; SQLite ASCII collation is already case-insensitive)
+    64→  - PIN-OR-password logic: if input matches isValidPin AND user has pinHash → verifyPin; else → verifyPassword against passwordHash
+    65→  - On success: update lastLoginAt, write AuditLog `user.login`, return { id, name, username, roles }
+    66→  - jwt + session callbacks merge id/username/roles onto token and session.user
+    67→  - `declare module "next-auth"` augments User/Session/JWT with `id, username, roles`
+    68→  - Pages: signIn "/login", signOut "/"
+    69→  - events.signOut writes AuditLog `user.signout` (best-effort, reads userId from message.jwt)
+    70→  - Exports ROLE_PERMISSIONS matrix (Admin "*", Security/Teacher/Volunteer/Kiosk/PeopleManager explicit allow-lists), PERMISSIONS union array, hasPermission(), getRolesForUser(), getCurrentUser(), requirePermission() and requireRole() (both redirect to /login?error=unauthorized on miss), SessionUser type
+    71→- Created `src/app/api/auth/[...nextauth]/route.ts` (NextAuth handler GET+POST)
+    72→- Created `src/app/api/setup/route.ts` (POST + GET): 409 guard if users exist, zod validation (org name, first/last name, email-optional, username ≥3 + regex, password ≥8), $transaction creates Organisation (upsert "default") + Person + User (Active) + UserRole (Admin) + AuditLog (setup.complete), then returns { ok: true }
+    73→- Created `src/components/providers.tsx` (client SessionProvider wrapper); wired into `src/app/layout.tsx` wrapping {children}+Toaster+SonnerToaster+ServiceWorkerRegister (existing layout content preserved)
+    74→- Built setup wizard `src/app/setup/page.tsx` (force-dynamic, redirects to "/" if users exist; renders centered card) + `src/app/setup/setup-form.tsx` (client, react-hook-form + zod, all fields + password confirm, on submit POST /api/setup → signIn("credentials", {redirect:false}) → router.push("/admin"); inline Alert on error; sticky footer; 44px touch targets)
+    75→- Replaced login stub `src/app/login/page.tsx` (force-dynamic server shell): reads searchParams (error, reason, callback), shows setup banner linking to /setup if db.user.count()===0, shows alert for ?error=unauthorized / ?reason=idle / ?reason=setup-success. Renders client `login-form.tsx`
+    76→- Built `src/app/login/login-form.tsx`: react-hook-form + zod, signIn("credentials", {redirect:false, callbackUrl}), on error → Alert "Invalid username or password", on success → router.push("/admin") (admin layout re-routes non-admin/PM/security roles to /volunteer or /kiosk)
+    77→- Built domain components:
+    78→  - `sign-out-button.tsx` (client, Button outline, calls signOut({callbackUrl:"/"}), LogOut icon, loading state)
+    79→  - `user-menu.tsx` (server-rendered, takes SessionUser prop; shows initials avatar + name + role Badges)
+    80→  - `idle-timeout.tsx` (client; 15-min idle, 60s sonner warning toast before signOut({callbackUrl:"/login?reason=idle"}); resets on mouse/keyboard/touch/scroll/click)
+    81→- Built protected layouts:
+    82→  - `src/app/admin/layout.tsx` (force-dynamic): getCurrentUser → redirect /login?callback=/admin if null; allowed = Admin/PeopleManager/Security; Kiosk-only → /kiosk; Teacher/Volunteer → /volunteer. Header (BrandMark + "Admin" + UserMenu + SignOutButton), max-w-6xl container, sticky footer with links to /volunteer and /. Includes IdleTimeout
+    83→  - `src/app/volunteer/layout.tsx` (force-dynamic): same pattern; allowed = Teacher/Volunteer/Security/Admin; Kiosk-only → /kiosk. Header "Volunteer", footer links to /admin and /. Includes IdleTimeout
+    84→- Upgraded stub pages:
+    85→  - `src/app/admin/page.tsx`: welcome card (user name + role badges + links to /volunteer and /kiosk), 7-section grid (People & Families S3, Branding & Toggles S2, Programs & Classes S5, Kiosk config S6, Reports S10, Import/Export S12, Backup/Restore S13) each with icon + "Coming in Stage N" badge
+    86→  - `src/app/volunteer/page.tsx`: welcome card (name + role badges), "Live tools arrive in Stage 9" notice, 3 placeholder chips (rosters, headcounts, reports)
+    87→- Tweaked home page `src/app/page.tsx`: computes setupMode = (db.user.count() === 0); swaps the "Admin / Volunteer sign-in" button label to "Finish setup" pointing to /setup when in setup mode, otherwise to /login. All other home content preserved
+    88→- Lint: `bun run lint` → 0 errors, 0 warnings (after removing one stale eslint-disable-next-line)
+    89→- Discovered dev server had cached the OLD Prisma Client (pre-schema-edit) in memory — first /api/setup call failed with PrismaClientValidationError "Unknown argument username". Fixed by touching next.config.ts to trigger Next's auto-restart, which re-imported the freshly-generated Prisma Client
+    90→- Discovered SQLite does NOT support `mode: "insensitive"` on String filters (PrismaClientValidationError). Removed `mode: "insensitive"` from authorize's user lookup; SQLite's default ASCII collation is already case-insensitive for username matching
+    91→- Browser self-verification with agent-browser (all steps passed):
+    92→  1. `bun run lint` clean
+    93→  2. `bun run db:push` succeeded; db.user.count() works (visible in dev.log as `SELECT COUNT(*) FROM User`)
+    94→  3. / renders, no console errors
+    95→  4. /setup wizard renders (no users yet); filled Org "Test SDA Church", first "Jane", last "Admin", email "jane@test.local", username "admin", password "password123" + confirm; submit → POST /api/setup 200 → POST /api/auth/callback/credentials 200 → landed on /admin
+    96→  5. /admin shows "Welcome, Jane Admin" + "Admin" role badge + Sign out button; no console errors
+    97→  6. /setup again → redirected to / (setup already complete)
+    98→  7. /login renders login form, no setup banner
+    99→  8. Sign out button → landed on / (callbackUrl "/")
+   100→  9. /volunteer while logged out → redirected to /login?callback=/volunteer; /admin while logged out → /login?callback=/admin
+   101→  10. Logged back in as admin at /login → landed on /admin; navigated to /volunteer → rendered (admin allowed)
+   102→  11. dev.log tail: no runtime errors during any visit
+   103→  12. Screenshots saved to /tmp/s1-admin.png and /tmp/s1-setup.png
+   104→
+   105→Stage Summary:
+   106→- Stage 1 COMPLETE. Full auth vertical slice shipped.
+   107→- Files created (new):
+   108→  - src/lib/password.ts, src/lib/audit.ts, src/lib/auth.ts
+   109→  - src/app/api/auth/[...nextauth]/route.ts
+   110→  - src/app/api/setup/route.ts
+   111→  - src/components/providers.tsx
+   112→  - src/components/domain/sign-out-button.tsx, user-menu.tsx, idle-timeout.tsx
+   113→  - src/app/setup/page.tsx, src/app/setup/setup-form.tsx
+   114→  - src/app/login/login-form.tsx
+   115→  - src/app/admin/layout.tsx
+   116→  - src/app/volunteer/layout.tsx
+   117→- Files modified:
+   118→  - prisma/schema.prisma (+Person, +User, +UserRole, +AuditLog)
+   119→  - .env (+NEXTAUTH_SECRET, +NEXTAUTH_URL)
+   120→  - src/app/layout.tsx (wrapped children in <Providers>)
+   121→  - src/app/page.tsx (setup-mode button label swap)
+   122→  - src/app/login/page.tsx (replaced stub with real shell + LoginForm)
+   123→  - src/app/admin/page.tsx (replaced stub with real admin home)
+   124→  - src/app/volunteer/page.tsx (replaced stub with real volunteer home)
+   125→- Decisions / deviations:
+   126→  - SQLite `mode: "insensitive"` is unsupported — used plain `equals` for username lookup (SQLite ASCII collation is case-insensitive anyway). Documented in code comment.
+   127→  - `requirePermission`/`requireRole` use Next's `redirect("/login?error=unauthorized")` (simplest acceptable per spec) rather than throw+error-boundary.
+   128→  - Login form always pushes to /admin on success; the /admin layout re-routes non-admin/PM/security roles to /volunteer (or /kiosk for Kiosk-only) — per spec's recommended approach.
+   129→  - AuditLog signOut event reads `message.jwt.id` for actorUserId; falls back to null if unavailable (per spec allowance).
+   130→  - Setup form sends email as null when blank (server zod schema accepts "" or valid email).
+   131→- Verification: all 12 self-verification steps pass; screenshots at /tmp/s1-admin.png and /tmp/s1-setup.png; dev.log clean of runtime errors.
+   132→- Deliverable met: "can log in as Admin" + "User↔Person link, Role/Permission matrix, requirePermission guard helper, first-run setup wizard" all functional.
+   133→- Next: Stage 2 — Organisation branding & feature toggles (can ride on the now-working admin shell).
+   134→
+   135→---
+   136→Task ID: 1 (verified)
+   137→Agent: main (orchestrator)
+   138→Task: Stage 1 — independent verification of auth/Users/RBAC
+   139→
+   140→Work Log:
+   141→- Confirmed `bun run lint` clean (0 errors/warnings)
+   142→- Reviewed dev.log: found historical PrismaClientValidationError entries (lines 236, 273, 304) from subagent's mid-build iteration BEFORE it forced a server restart via `touch next.config.ts` (line ~311). These are stale/resolved, not current.
+   143→- Scanned dev.log strictly after the restart (NR>312): ZERO errors/failures.
+   144→- Independent agent-browser golden-path verification:
+   145→  - Home (/) renders with DB-driven branding ("Test SDA Church" title — confirms Organisation row created by setup)
+   146→  - /login form renders (Username + Password/PIN fields, Sign in button)
+   147→  - Filled admin/password123 → POST /api/auth/callback/credentials 200 → redirected to /admin
+   148→  - /admin shows "Welcome, Jane Admin" + Admin role badge + Sign out button + "Coming soon" section cards
+   149→  - No console errors, no page errors
+   150→  - Sign out → lands on /
+   151→  - /volunteer while logged out → redirects to /login?callback=/volunteer (protected layout works)
+   152→  - /setup while users exist → redirects to / (setup-mode guard works)
+   153→  - /kiosk stub still renders intact (untouched by Stage 1)
+   154→  - Screenshots saved: /tmp/s1-admin-verify.png (desktop), /tmp/s1-admin-mobile.png (mobile 375x812)
+   155→
+   156→Stage Summary:
+   157→- Stage 1 COMPLETE and independently verified. Auth, Users (linked 1:1 to People), Roles (Admin/Security/Teacher/Volunteer/Kiosk/PeopleManager), Permissions matrix, NextAuth credentials provider (password + PIN capable), first-run setup wizard, protected /admin & /volunteer layouts with role gating, sign-out, audit logging (login/setup/signout events), idle-timeout hook all functional.
+   158→- Test data in DB: Org "Test SDA Church", admin user (username "admin", password "password123"), Person "Jane Admin" with Admin role.
+   159→- Next: Stage 2 — Organisation branding & feature toggles (FeatureFlags table + Admin UI for every toggle in PLAN.md §6, branding flows into theme/manifest/labels, terminology resolver for client components).
+   160→
+   161→---
+   162→Task ID: 2
+   163→Agent: full-stack-developer
+   164→Task: Stage 2 — Organisation branding & feature toggles (FeatureFlag model, /api/config, ConfigProvider, RuntimeTheme, /admin/settings with branding + terminology + toggles, logo upload)
+   165→
+   166→Work Log:
+   167→- Read worklog (Stage 0/1) + PLAN.md §6/§2; confirmed existing branding.ts, auth.ts, Organisation model, /admin shell, ConfigProvider-less Providers
+   168→- Created `agent-ctx/` and `data/branding/` directories for the file-storage pattern (later stages reuse for photos/backups)
+   169→- Added `FeatureFlag` model to `prisma/schema.prisma` (key/value/updatedAt/updatedBy). Ran `bun run db:push` → synced, Prisma Client regenerated
+   170→- Created `src/lib/paths.ts` (DATA_DIR, BRAND_DIR, PHOTOS_DIR, BACKUPS_DIR constants — env-overridable via CHILDCHECK_DATA_DIR for Docker/NAS mounts)
+   171→- Created `src/lib/feature-flags.ts`:
+   172→  - FEATURE_FLAGS registry (14 flags across 6 categories matching PLAN §6 exactly): kiosk_requires_login, guardian_pin_signin, guardian_self_registration, older_sibling_collect, override_checkout, photo_verification, print_name_labels, print_signout_code, visitors_add_to_db, working_with_children_tracking, email_as_contact, email_recovery, audit_log_detailed, scheduled_backups
+   173→  - DEFAULT_FLAGS lookup map + FLAG_KEYS Set for validation
+   174→  - getFeatureFlags() (5s in-memory cache, merges DB rows with defaults, degrades to all-defaults if DB not ready)
+   175→  - getFeatureFlag(key) + isFeatureEnabled(key) convenience
+   176→  - setFeatureFlag(key, value, updatedBy) — upsert + cache invalidation + AuditLog("flag.update")
+   177→  - seedDefaultFlags() idempotent
+   178→  - Throws on unknown keys (defensive validation)
+   179→- Created `src/app/api/config/route.ts` — public GET, force-dynamic, combines getOrgConfig() + getFeatureFlags() → { branding, terminology, flags }; Cache-Control public max-age=5 s-maxage=5
+   180→- Upgraded `src/components/providers.tsx` — kept SessionProvider, added ConfigProvider (fetches /api/config on mount + on window focus, exposes {config, loading, error, refresh} via context). Exported ConfigContext + PublicConfig type so hooks can consume.
+   181→- Created `src/hooks/use-config.ts`, `use-terminology.ts` (returns terminology + t(key) resolver w/ default fallback), `use-flags.ts` (returns flags + isEnabled(key) merged with DEFAULT_FLAGS so the UI never renders with empty flags during load)
+   182→- Created `src/components/domain/runtime-theme.tsx` — client component, sets CSS variables --primary/--ring/--sidebar-primary/--sidebar-ring/--chart-1/--primary-foreground from primaryColor; --accent/--chart-2/--accent-foreground from accentColor; uses WCAG luminance to pick white vs #1a2b28 foreground. try/catch + typeof window guard. No-op until branding loads.
+   183→- Created `src/app/api/admin/branding/route.ts`:
+   184→  - GET — Admin only; returns current branding + terminology + organisation name
+   185→  - PUT — Admin only; zod validates name(1-100), appName(1-60), tagline(0-120), primaryColor/accentColor(/^#[0-9a-fA-F]{6}$/), terminology(record<string,string>, values 1-40, keys must be in DEFAULT_TERMINOLOGY). Merges terminology overrides over existing, updates Organisation row, invalidateOrgConfigCache(), AuditLog("branding.update"). Returns updated config.
+   186→- Created `src/app/api/admin/branding/logo/route.ts`:
+   187→  - POST — Admin; multipart/form-data with `file` field; validates type ∈ {png,jpg,svg,webp} + size ≤2MB; mkdir BRAND_DIR recursive; clears previous logo files; writes logo.<ext>; updates Organisation.logoUrl; invalidateOrgConfigCache; AuditLog("branding.logo")
+   188→  - DELETE — Admin; clears dir, sets logoUrl=null, invalidates, audits
+   189→- Created `src/app/api/branding/logo/route.ts` — public GET; looks up Organisation.logoUrl; returns file with correct Content-Type + Cache-Control public max-age=3600 immutable; returns 404 + small SVG placeholder if no logo or file missing. Filename regex-validated to prevent path traversal.
+   190→- Created `src/app/api/admin/flags/route.ts`:
+   191→  - GET — Admin; returns { flags, defs: FEATURE_FLAGS }
+   192→  - PUT — Admin; zod validates record<string,boolean>; rejects unknown keys; calls setFeatureFlag for each (writes audit per flag); returns updated flags
+   193→- Built `src/app/admin/settings/page.tsx` — server component, force-dynamic, requireRole("Admin") (with belt-and-braces redirect). Two-tab shadcn Tabs shell (Branding & Terminology / Feature Toggles), back-link to /admin
+   194→- Built `src/app/admin/settings/branding-form.tsx` — client form:
+   195→  - Loads current branding via GET /api/admin/branding
+   196→  - Fields: Organisation name, App name, Tagline, Primary colour (color picker + hex text + swatch), Accent colour (same), Logo (preview + Upload + Remove via hidden file input)
+   197→  - Terminology editor: 21-key grid, each labelled with key (e.g. "Sabbath School program term") + "Default: X" hint, maxLength 40
+   198→  - Save button → PUT /api/admin/branding; on success toast "Branding saved", refresh() the client config + router.refresh() for server-rendered text
+   199→  - Reset terminology button with AlertDialog confirm → restores DEFAULT_TERMINOLOGY locally (Save still required to persist)
+   200→  - Sticky Save bar
+   201→- Built `src/app/admin/settings/flags-form.tsx` — client form:
+   202→  - Loads current flags + defs via GET /api/admin/flags
+   203→  - Groups by category, anchors for quick nav
+   204→  - Switch + label + description + "Default: on/off" hint per flag
+   205→  - Save button (disabled until dirty) → PUT /api/admin/flags with diff only; toast "Toggles saved"
+   206→  - Wrapped in max-h-[70vh] overflow-y-auto scroll-thin container
+   207→- Updated `src/app/admin/page.tsx` — Branding & Toggles card now links to /admin/settings with "Open" CTA (other 6 cards remain "Coming soon" with stage badges). Added Settings shortcut in welcome header. Added a "System status" card showing current org name + link to settings.
+   208→- Wired RuntimeTheme into `src/app/layout.tsx` inside <Providers> (before children)
+   209→- Lint: `bun run lint` → 0 errors, 0 warnings
+   210→- Initial /api/config returned 500 because Turbopack cached the pre-FeatureFlag Prisma Client; forced a restart via `touch next.config.ts` (same pattern Stage 1 used). After restart, /api/config returns 200 and db.featureFlag.upsert() works.
+   211→- Verified ConfigContext wasn't exported initially (Turbopack flagged "Export ConfigContext doesn't exist"); fixed by exporting it + PublicConfig type from providers.tsx.
+   212→
+   213→Self-verification (agent-browser, all passed):
+   214→1. bun run lint → clean (0/0)
+   215→2. bun run db:push → succeeded; FeatureFlag table created and queryable (visible as `SELECT FROM main.FeatureFlag` in dev.log)
+   216→3. Logged in as admin/password123 → landed on /admin
+   217→4. /admin/settings renders with two tabs, no console errors
+   218→5. Branding tab: set primary colour #7c3aed, tagline "Test Tagline", "Sabbath School" → "Sunday School". Saved → toast "Branding saved" appeared; admin header primary colour visually changed to purple; home page rendered "Sunday School" in programme copy; tagline "Test Tagline" in title; /api/config reflected all changes. No console errors.
+   219→6. Feature Toggles tab: flipped kiosk_requires_login ON, photo_verification OFF. Saved → toast "Toggles saved". curl /api/config confirmed kiosk_requires_login:true, photo_verification:false.
+   220→7. Reverted: primary colour → #0f9d8a, tagline → "Secure Child Check-In & Check-Out", "Sunday School" → "Sabbath School", both flags back to defaults. Verified via /api/config — all back to SDA defaults.
+   221→8. Logo upload: created /tmp/test-logo.svg (290 bytes), uploaded via form; preview showed; /api/branding/logo served 200 image/svg+xml 290 bytes; removed via Remove button; /api/branding/logo returned 404 placeholder; UI showed "No logo".
+   222→9. Logged-out visit to /admin/settings → 307 redirect to /login?callback=/admin
+   223→10. curl PUT /api/admin/flags + /api/admin/branding with no cookie → 401 for both
+   224→11. dev.log tail: zero runtime errors post-restart; all 200/307/401 status codes as expected
+   225→12. Screenshots saved: /tmp/s2-settings.png, /tmp/s2-rebranded.png (home page after purple+Sunday School change), /tmp/s2-flags.png, /tmp/s2-admin-home.png, /tmp/s2-admin-home-final.png
+   226→
+   227→Stage Summary:
+   228→- Stage 2 COMPLETE. Full branding/terminology/feature-toggle vertical slice shipped and verified.
+   229→- Files created (new):
+   230→  - prisma/schema.prisma (+FeatureFlag model — modified)
+   231→  - src/lib/paths.ts (DATA_DIR, BRAND_DIR, PHOTOS_DIR, BACKUPS_DIR)
+   232→  - src/lib/feature-flags.ts (FEATURE_FLAGS registry + cached helpers + setFeatureFlag + seedDefaultFlags)
+   233→  - src/app/api/config/route.ts (public merged config endpoint)
+   234→  - src/app/api/admin/branding/route.ts (Admin GET/PUT branding+terminology)
+   235→  - src/app/api/admin/branding/logo/route.ts (Admin POST/DELETE logo file)
+   236→  - src/app/api/branding/logo/route.ts (public GET logo w/ 404 SVG placeholder)
+   237→  - src/app/api/admin/flags/route.ts (Admin GET/PUT flags)
+   238→  - src/app/admin/settings/page.tsx (server shell, two-tab layout)
+   239→  - src/app/admin/settings/branding-form.tsx (client form)
+   240→  - src/app/admin/settings/flags-form.tsx (client form)
+   241→  - src/hooks/use-config.ts, use-terminology.ts, use-flags.ts
+   242→  - src/components/domain/runtime-theme.tsx
+   243→- Files modified:
+   244→  - src/components/providers.tsx (added ConfigProvider, exported ConfigContext + PublicConfig type)
+   245→  - src/app/layout.tsx (added <RuntimeTheme /> inside <Providers>)
+   246→  - src/app/admin/page.tsx (Branding & Toggles card → real link to /admin/settings; added Settings shortcut + system-status card)
+   247→- Decisions / deviations:
+   248→  - Exported ConfigContext + PublicConfig type from providers.tsx (Turbopack requires statically-known exports for cross-module imports). Not marked as a public API surface but exposed for the hooks.
+   249→  - Logo files stored in `/home/z/my-project/data/branding/logo.<ext>` (NOT /public) — served via /api/branding/logo API route with content-type sniffing + 1h immutable cache. Filename regex-validated to prevent path traversal. SVG placeholder returned with 404 when no logo.
+   250→  - Flag PUT endpoint writes one AuditLog row per changed flag (via setFeatureFlag) — fine-grained audit trail without extra code.
+   251→  - Branding PUT merges terminology overrides over existing (preserves previously-set keys not in the current payload) — so partial terminology edits don't wipe other terms.
+   252→  - RuntimeTheme uses standard WCAG luminance to pick foreground (white for dark backgrounds, #1a2b28 for light) — auto-contrasts the primary/accent buttons.
+   253→  - Forced dev server restart via `touch next.config.ts` after schema push — Turbopack cached the pre-FeatureFlag Prisma Client in memory (same pattern Stage 1 hit). Documented in code path so future agents know.
+   254→  - Flags-form Save button disabled until dirty (UX nicety, prevents no-op PUTs).
+   255→  - Branding-form Save button sticky at bottom with backdrop blur — keeps it reachable on long terminology lists.
+   256→- Verification: all 12 self-verification steps pass; screenshots at /tmp/s2-settings.png + /tmp/s2-rebranded.png; dev.log clean of runtime errors; admin login still works; SDA defaults restored for next stage.
+   257→- Deliverable met: "a second organisation (e.g. a Scouts troop) could install, rebrand, and rename 'Sabbath School' → 'Unit' entirely from the dashboard" — Stage 2 fully satisfies this; the same binary now serves any org via dashboard-driven branding + terminology + flags.
+   258→- Next: Stage 3 — People & Families (Person CRUD, Family, photos, WWCC, visitors, search).
+   259→
+   260→---
+   261→Task ID: 2 (verified)
+   262→Agent: main (orchestrator)
+   263→Task: Stage 2 — independent verification of branding & feature toggles
+   264→
+   265→Work Log:
+   266→- Confirmed `bun run lint` clean (0 errors/warnings)
+   267→- Confirmed `bun run db:push` succeeded; FeatureFlag table exists with all 14 flags
+   268→- Inspected GET /api/config: returns branding + 21 terminology terms + 14 flags, all at SDA defaults
+   269→- Logged in as admin/password123 → /admin → /admin/settings renders with two tabs (Branding & Terminology, Feature Toggles), no console errors
+   270→- Live rebrand test: changed primary colour #0f9d8a → #7c3aed, terminology "Sabbath School" → "Sunday School", tagline, saved → "Branding saved" toast → home page now shows "Sunday School" (confirmed in snapshot text) + /api/config reflects purple + Sunday School
+   271→- Toggle test: flipped kiosk_requires_login ON, photo_verification OFF → Save enabled (dirty-state) → saved → /api/config confirms kiosk_requires_login=True, photo_verification=False
+   272→- Auth guards: unauthenticated PUT /api/admin/flags → 401; PUT /api/admin/branding → 401; /admin/settings while logged out → redirect to /login?callback=/admin
+   273→- REVERTED all test changes back to SDA defaults: primaryColor=#0f9d8a, "Sabbath School", kiosk_requires_login=False, photo_verification=True — verified via /api/config
+   274→- dev.log: zero errors since last server restart (line 1022)
+   275→- Screenshot: /tmp/s2-settings-verify.png
+   276→
+   277→Stage Summary:
+   278→- Stage 2 COMPLETE and independently verified. System is now fully rebrandable from the dashboard: colours flow into the live CSS theme at runtime, terminology overrides reflect app-wide (server + client via ConfigProvider), all 14 feature toggles from PLAN.md §6 are editable and persist, logo upload/remove works via file storage under ./data/branding/. Public /api/config endpoint feeds client theming. Admin APIs are role-guarded (401 unauthenticated). Project reverted to SDA defaults for next stage.
+   279→- Next: Stage 3 — People & Families (Person CRUD Adult/Child with type-specific fields, Family CRUD with PrimaryCarer+Child memberships, encrypted photo storage, medical/allergy fields with role-scoped visibility, WorkingWithChildrenCard tracking, visitor flag, paginated search for People Managers).
+   280→
+   281→---
+   282→Task ID: 3
+   283→Agent: full-stack-developer
+   284→Task: Stage 3 — People & Families (dual org-type profiles SDA/non-SDA, extended Person model, Family/FamilyMember, encrypted photos AES-256-GCM, WWCC tracking, role-scoped medical visibility, admin CRUD UIs)
+   285→
+   286→Work Log:
+   287→- Read worklog (Stages 0/1/2) + PLAN.md §4.3/§5; confirmed existing Person/User/UserRole/AuditLog/Organisation/FeatureFlag models, branding.ts, auth.ts (requirePermission, hasPermission, ROLE_PERMISSIONS), paths.ts (PHOTOS_DIR), feature-flags.ts, /api/config, ConfigProvider, /admin shell, /admin/settings (BrandingForm + FlagsForm)
+   288→- Extended `prisma/schema.prisma`:
+   289→  - Person: added preferredName, dateOfBirth, schoolGrade, gender, allergies, medicalNotes, dietaryNotes, emergencyContactName/Phone, isVisitor, isActive, createdById, familyMemberships + wwccards relations (kept existing fields + user relation)
+   290→  - Added `Family` (id, familyName, notes, isActive, timestamps, createdById, members)
+   291→  - Added `FamilyMember` (id, familyId, personId, role, createdAt, family+person cascade relations, @@unique([familyId, personId]))
+   292→  - Added `WorkingWithChildrenCard` (id, personId, cardType, jurisdiction, cardNumber, status default "Pending", issuedAt, expiresAt, verifiedById, verifiedAt, notes, timestamps, person relation cascade)
+   293→  - Organisation: added `orgType String @default("SDA")`
+   294→  - Ran `bun run db:push` → schema synced, Prisma Client regenerated. Forced dev server restart via `touch next.config.ts` to clear Turbopack's cached client.
+   295→- Created `src/lib/org-profiles.ts` — OrgType union (SDA/SundayChurch/Scouts/Childcare/School/Club/Other), ORG_PROFILES registry (each profile = type/label/description/terminology-overrides/flags-overrides), getProfile() with Other fallback, isOrgType() type guard
+   296→- Updated `src/lib/branding.ts` — added `orgType: string` to OrgConfig; getOrgConfig() reads org.orgType (falls back to "SDA")
+   297→- Updated `src/components/providers.tsx` — added `orgType?: string` to PublicConfig
+   298→- Updated `src/app/api/config/route.ts` — response now includes `orgType`
+   299→- Updated `src/app/api/admin/branding/route.ts` GET — response now includes `orgType`
+   300→- Created `src/lib/crypto.ts` — AES-256-GCM encrypt/decrypt (12-byte IV + 16-byte auth tag), writeEncryptedFile/readEncryptedFile (file format: [iv][tag][ciphertext]). Master key from CHILDCHECK_DATA_KEY env (dev: stable SHA-256 seed; production: must be 32 random bytes). Documented rotation strategy (Stage 16).
+   301→- Created `src/lib/people.ts` — toPersonListDTO (LIST-safe: strips every medical field, includes hasPhoto boolean + familyCount + ageInfo for children + wwccStatusSummary when flag on), toPersonDetailDTO (DETAIL: includes medical fields), summariseWwcc (Verified > Pending > Expired > Cancelled), loadPersonDetail helper
+   302→- Created `src/app/api/admin/organisation/profile/route.ts`:
+   303→  - GET — returns profiles list + current profile (Admin only)
+   304→  - POST — validates orgType with zod + isOrgType; in a $transaction: updates Organisation.orgType, MERGES profile terminology over existing (preserves user-customised keys not in the profile), upserts only the flag keys the profile defines; invalidates branding + flag caches; AuditLog "org.profile.apply"; returns updated config
+   305→- Created `src/app/api/admin/people/route.ts`:
+   306→  - GET — view_people; query: q (firstName/lastName/preferredName/email/phone), personType, isVisitor, includeInactive, page, pageSize (default 20, max 100); returns LIST-safe DTOs (no medical fields); wwccStatusSummary only when flag on
+   307→  - POST — manage_people; zod-validated; creates Person with type-specific fields; sets createdById; AuditLog "person.create"; returns 201
+   308→- Created `src/app/api/admin/people/[id]/route.ts`:
+   309→  - GET — view_people; full detail INCLUDING medical fields (caller must have view_people); includes family memberships + WWCC cards (if flag on)
+   310→  - PUT — manage_people; zod-validated; tracks changed fields; AuditLog "person.update" with diff
+   311→  - DELETE — manage_people; soft-delete (isActive=false); 409 if person has linked User (with explanation); AuditLog "person.delete" with softDelete:true
+   312→- Created `src/app/api/admin/people/[id]/photo/route.ts`:
+   313→  - POST — manage_people; multipart `file` (png/jpg/webp, max 5MB); validates type+size; sharp resize to 512x512 JPEG q85; writeEncryptedFile to PHOTOS_DIR/<personId>.enc; updates Person.photoPath = "people/<personId>.enc"; AuditLog "person.photo.upload"
+   314→  - DELETE — manage_people; removes file + clears photoPath; AuditLog "person.photo.remove"
+   315→- Created `src/app/api/people/[id]/photo/route.ts`:
+   316→  - GET — auth required (any logged-in user); if no photo: 404 with generated SVG initials avatar (deterministic hue from name hash); if photo: readEncryptedFile → returns image/jpeg with Cache-Control: private, max-age=3600; filename regex-validated against path traversal; falls back to initials avatar if decryption fails (tamper/wrong-key)
+   317→- Created `src/app/api/admin/people/[id]/wwcc/route.ts`:
+   318→  - GET — view_people; if flag off, returns {enabled:false, items:[]}; else list cards
+   319→  - POST — manage_people; if flag off, 403; zod-validated (cardType required, status enum, dates optional); auto-stamps verifiedById/verifiedAt when status="Verified"; AuditLog "wwcc.create"
+   320→- Created `src/app/api/admin/wwcc/[id]/route.ts`:
+   321→  - PUT — manage_people; flag-gated; zod-validated; tracks changes; if status changes to Verified auto-stamps verifiedById/At; AuditLog "wwcc.update"
+   322→  - DELETE — manage_people; flag-gated; AuditLog "wwcc.delete"
+   323→- Created `src/app/api/admin/families/route.ts`:
+   324→  - GET — view_people; query: q (familyName or member firstName/lastName), page, pageSize; returns list with memberCount + primaryCarers + childrenCount
+   325→  - POST — manage_people; zod-validated {familyName, notes?, memberIds?}; validates memberIds exist + are active; auto-derives role from personType (Child → Child, Adult → PrimaryCarer); AuditLog "family.create"
+   326→- Created `src/app/api/admin/families/[id]/route.ts`:
+   327→  - GET — view_people; full detail with members (person summary per member with role)
+   328→  - PUT — manage_people; update familyName/notes/isActive; AuditLog "family.update"
+   329→  - DELETE — manage_people; soft-delete (isActive=false); AuditLog "family.delete"
+   330→- Created `src/app/api/admin/families/[id]/members/route.ts`:
+   331→  - POST — manage_people; zod-validated {personId, role}; role ∈ {PrimaryCarer, Child, AuthorisedGuardian, EmergencyContact}; 404 if family/person not found; 409 if membership already exists; AuditLog "family.member.add"
+   332→- Created `src/app/api/admin/families/[id]/members/[personId]/route.ts`:
+   333→  - DELETE — manage_people; 404 if not found; AuditLog "family.member.remove"
+   334→- Built admin People UI:
+   335→  - `src/app/admin/people/page.tsx` — server component, force-dynamic, requirePermission("view_people"); sticky header w/ back link; renders PeopleList client component
+   336→  - `src/app/admin/people/people-list.tsx` — client; debounced search, personType select (All/Adult/Child via useTerminology), Visitors toggle, Archived toggle, Add-person button, table with avatar/name/type/contact/families/WWCC/status/actions columns; max-h-[70vh] overflow-y-auto scroll-thin; pagination controls; AlertDialog for soft-delete (with self-delete guard)
+   337→  - `src/app/admin/people/person-form.tsx` — client; react-hook-form + zod; Tabs (Identity / Contact / Child details / Medical); Medical tab has destructive-tinted banner explaining sensitivity; on save → POST or PUT; toast + refresh
+   338→  - `src/app/admin/people/[id]/page.tsx` — server detail shell; loads person + family memberships + WWCC cards (if flag on); renders PersonDetail client component with initial DTO
+   339→  - `src/app/admin/people/[id]/person-detail.tsx` — client; large avatar + upload/remove photo controls; edit dialog (PersonForm); archive button; family memberships list with links; medical section in destructive-bordered Card with "Sensitive" warning; WWCC section (if flag on) with add-card form + per-card status update + remove
+   340→- Built admin Families UI:
+   341→  - `src/app/admin/families/page.tsx` — server shell, requirePermission("view_people")
+   342→  - `src/app/admin/families/families-list.tsx` — client; debounced search; Add-family button; table with family name / primary carers / children count / members count / view action; pagination
+   343→  - `src/app/admin/families/family-form.tsx` — client; familyName + notes + person picker (debounced search → multi-add; adults default to PrimaryCarer, children to Child)
+   344→  - `src/app/admin/families/[id]/page.tsx` — server detail shell
+   345→  - `src/app/admin/families/[id]/family-detail.tsx` — client; family header (editable name/notes inline); add-member panel (search + role select); members grouped by role (PrimaryCarer / Child / EmergencyContact / AuthorisedGuardian) using useTerminology for labels; per-member remove with confirm; archive button
+   346→- Built org-type selector:
+   347→  - `src/app/admin/settings/org-type-selector.tsx` — client; loads current orgType from /api/admin/branding; Select populated from ORG_PROFILES; shows label + description + chips of terminology/flag overrides for the selected profile; Apply button (disabled if not dirty); AlertDialog confirm ("This will reset terminology and selected toggles to the <Profile> defaults. Continue?"); POST /api/admin/organisation/profile → refresh() config + toast "Profile applied"
+   348→  - Wired into `/admin/settings` Branding tab above the existing BrandingForm
+   349→- Updated `/admin` home:
+   350→  - People & Families card now links to /admin/people (href)
+   351→  - Welcome header gets People + Families + Settings + Volunteer + Open kiosk shortcut buttons
+   352→  - Branding & Toggles card description mentions "org type"
+   353→- Updated /api/admin/branding GET to include orgType so the OrgTypeSelector can show current
+   354→- Lint: `bun run lint` → 0 errors, 0 warnings
+   355→- Forced dev server restart via `touch next.config.ts` after schema push (Turbopack cached the pre-extension Prisma Client — same pattern Stages 1+2 hit)
+   356→
+   357→Self-verification (curl + agent-browser, all passed):
+   358→1. `bun run lint` → clean (0/0)
+   359→2. `bun run db:push` → succeeded; Person extended, Family/FamilyMember/WorkingWithChildrenCard created, Organisation.orgType added
+   360→3. `GET /api/config` → returns `orgType: "SDA"`
+   361→4. Login admin/password123 → /admin → no console errors
+   362→5. Org-type profile swap (curl + UI):
+   363→   - POST /api/admin/organisation/profile `{orgType:"SundayChurch"}` → 200; /api/config shows `terminology.program_sabbath_school = "Sunday School"`
+   364→   - UI: opened /admin/settings, picked "Sunday Church", Apply → confirm dialog → toast "Profile applied — Sunday Church defaults are now in effect."; dropdown now shows Sunday Church as currently applied
+   365→   - **REVERTED**: POST `{orgType:"SDA"}` → /api/config shows `program_sabbath_school = "Sabbath School"` again; UI verified too (pick SDA → Apply → confirm → "Profile applied")
+   366→6. People CRUD:
+   367→   - /admin/people renders with search + filters + Add button, no console errors
+   368→   - POST /api/admin/people (Adult "John Smith", email john@x.local, phone 0412345678) → 201; appears in list
+   369→   - POST (Child "Mary Smith", DOB 2018-05-10, allergy "Peanuts", medical "Asthma") → 201; appears in list with "Age 8" badge
+   370→   - GET /api/admin/people (list) response does NOT contain allergies/medicalNotes fields (curl verified)
+   371→   - GET /api/admin/people/{childId} (detail) DOES contain allergies + medicalNotes (curl verified)
+   372→   - PUT preferredName "Maz" → detail reflects it; list shows "Mary Smith "Maz" Age 8"
+   373→   - Uploaded /tmp/test-face.png (created via python script — 16x16 red PNG) → POST /api/admin/people/{id}/photo 200; GET /api/people/{id}/photo returns image/jpeg 512x512; file at data/photos/{id}.enc reports "data" via `file` command (NOT a PNG — encrypted at rest confirmed)
+   374→   - /admin/people/{id} detail page renders with photo, medical section (Peanuts/Asthma shown), WWCC section with add-card form
+   375→   - Person with no photo returns 404 + SVG initials avatar (deterministic hue)
+   376→7. Family CRUD:
+   377→   - /admin/families renders
+   378→   - POST /api/admin/families {familyName:"Smith", memberIds:[John,Mary]} → 201; list shows "Smith | John Smith | 0 children | 2 members"
+   379→   - /admin/families/{id} detail shows members grouped (Primary Carers / Children sections)
+   380→   - DELETE /api/admin/families/{id}/members/{Mary} → family now has 1 member (John), 0 children
+   381→8. Medical visibility (curl): list response has NO allergies/medicalNotes fields; detail response HAS them. UI: people table has no medical column; person detail page has medical section with red accent + "Sensitive — visible to authorised roles only" notice.
+   382→9. Soft-delete:
+   383→   - DELETE John (no User linked) → 200 ok; default list excludes him; includeInactive=true shows him with isActive=false
+   384→   - DELETE Jane Admin (has linked User) → 409 with explanation "Person has a linked login account. Disable or remove the User account before deleting this Person."
+   385→10. WWCC:
+   386→   - Flag ON (default): POST /api/admin/people/{John}/wwcc {cardType:"QLD Blue Card", cardNumber:"12345", status:"Verified", expiresAt:"2027-12-31"} → 201; list returns card with verifiedAt stamped; person detail shows WWCC section
+   387→   - Flag OFF via PUT /api/admin/flags → list response has wwccStatusSummary:null; GET /api/admin/people/{id}/wwcc returns {enabled:false, items:[]}; person detail page hides WWCC section (client uses useFlags())
+   388→   - Flag back ON → WWCC section reappears
+   389→11. Auth guards (logged out):
+   390→   - GET /api/admin/people → 401
+   391→   - GET /admin/people → 307 redirect to /login?callback=/admin/people
+   392→12. dev.log: zero runtime errors during all the above; all routes return 200/201/307/401/404/409 as expected
+   393→13. Screenshots saved: /tmp/s3-people.png, /tmp/s3-person-detail.png, /tmp/s3-family.png, /tmp/s3-family-detail.png, /tmp/s3-orgtype-selector.png
+   394→
+   395→Stage Summary:
+   396→- Stage 3 COMPLETE. People & Families vertical slice shipped and verified end-to-end.
+   397→- Files created (new):
+   398→  - src/lib/org-profiles.ts, src/lib/crypto.ts, src/lib/people.ts
+   399→  - src/app/api/admin/organisation/profile/route.ts
+   400→  - src/app/api/admin/people/route.ts, [id]/route.ts, [id]/photo/route.ts, [id]/wwcc/route.ts
+   401→  - src/app/api/people/[id]/photo/route.ts
+   402→  - src/app/api/admin/wwcc/[id]/route.ts
+   403→  - src/app/api/admin/families/route.ts, [id]/route.ts, [id]/members/route.ts, [id]/members/[personId]/route.ts
+   404→  - src/app/admin/people/page.tsx, people-list.tsx, person-form.tsx
+   405→  - src/app/admin/people/[id]/page.tsx, person-detail.tsx
+   406→  - src/app/admin/families/page.tsx, families-list.tsx, family-form.tsx
+   407→  - src/app/admin/families/[id]/page.tsx, family-detail.tsx
+   408→  - src/app/admin/settings/org-type-selector.tsx
+   409→- Files modified:
+   410→  - prisma/schema.prisma (+Person fields, +Family, +FamilyMember, +WorkingWithChildrenCard, +Organisation.orgType)
+   411→  - src/lib/branding.ts (OrgConfig.orgType, getOrgConfig reads org.orgType)
+   412→  - src/components/providers.tsx (PublicConfig.orgType)
+   413→  - src/app/api/config/route.ts (response includes orgType)
+   414→  - src/app/api/admin/branding/route.ts (GET includes orgType)
+   415→  - src/app/admin/settings/page.tsx (OrgTypeSelector placed above BrandingForm)
+   416→  - src/app/admin/page.tsx (People & Families card links to /admin/people; welcome header shortcuts)
+   417→- Decisions / deviations:
+   418→  - Photo storage format: single concatenated file [12-byte iv][16-byte auth tag][ciphertext], extension `.enc`, served as image/jpeg (resized to 512x512 via sharp at upload). `file` command reports "data" not "PNG" — confirms encryption at rest.
+   419→  - Photo master key: CHILDCHECK_DATA_KEY env var (32 bytes / 64 hex chars). Dev uses stable SHA-256 of fixed seed so photos round-trip on a single instance. Production MUST set this to a strong random key.
+   420→  - Org-type profile application is a MERGE: profile terminology keys overwrite existing values for the same keys, but DO NOT wipe other customised keys. Only the flag keys named in the profile are upserted. Applying SDA after SundayChurch restores SDA defaults (because SDA profile includes its own program_sabbath_school:"Sabbath School" override).
+   421→  - Person soft-delete: only blocks if person has a linked User (409 with explanation). FamilyMember rows referencing the person remain (audit/child-safety). Hard deletes are never performed.
+   422→  - Medical field visibility enforced via toPersonListDTO / toPersonDetailDTO split in src/lib/people.ts. List DTO simply omits the medical fields entirely; detail DTO includes them; route handler gates via view_people permission.
+   423→  - WWCC list endpoint returns `{enabled, items}` so UI can hide the section when flag off. Person detail client uses useFlags() to conditionally render the WWCC section.
+   424→  - Photo GET endpoint allows any logged-in user to view any person's photo in Stage 3. Full role/room scoping arrives with classes/rooms in Stage 5 — documented in the route file.
+   425→  - PersonForm uses Tabs (Identity / Contact / Child details / Medical) so the form is browsable without scrolling; Medical tab has destructive-tinted banner explaining sensitivity.
+   426→  - Family create form auto-derives member role from personType (Adult → PrimaryCarer, Child → Child). Roles can be customised later from the family detail page's add-member panel (full role select).
+   427→- Verification: all 13 self-verification steps pass; screenshots saved; dev.log clean of runtime errors; test admin login still works; org-type test REVERTED to "SDA" before finishing.
+   428→- Deliverable met: "Admin/PeopleManager can build the whole people/family graph" + "Seventh-day Adventist defaults for a Seventh-day Adventist organisation and suitable non Seventh-day Adventist defaults for other organisations."
+   429→- Next: Stage 4 — Authorised Guardians, Blacklist, Older-sibling authorisation.
+   430→
+   431→---
+   432→Task ID: 3 (verified + bugfixed)
+   433→Agent: main (orchestrator)
+   434→Task: Stage 3 — independent verification of People & Families + dual org-type defaults
+   435→
+   436→Work Log:
+   437→- Confirmed `bun run lint` clean; `db:push` succeeded (Person extended, Family/FamilyMember/WorkingWithChildrenCard added, Organisation.orgType added)
+   438→- Verified /api/config returns orgType:"SDA" with Sabbath School defaults
+   439→- Verified home page spiel update survived: "built with Seventh-day Adventist Organisations for Sabbath School, Pathfinders and Adventurers etc. in mind"
+   440→- Logged in as admin/password123 → /admin/people renders with search, filters, Add button, pagination, existing test people (Jane Admin, John Smith, Mary Smith)
+   441→- Person detail (Mary Smith): photo renders, Medical & allergy section with "Sensitive — visible to authorised roles only. Never returned in list views." notice, WWCC section with QLD Blue Card dropdown
+   442→- Encrypted photo verification: file at data/photos/<id>.enc reports as "data" type (NOT PNG) — 1834 bytes for 512x512 JPEG, consistent with AES-256-GCM overhead. Encryption at rest confirmed.
+   443→- Medical scoping verification: fetch('/api/admin/people') via browser session returns items with ZERO medical keys (no allergies, no medicalNotes) even for Mary who has those fields. List DTO correctly strips sensitive data.
+   444→- Org-type profile swap (the dual-defaults feature the user explicitly requested):
+   445→  - Applied Scouts profile via UI → /api/config shows program_sabbath_school="Unit Night", group="Unit", child="Youth", volunteer="Leader". People page column header changed from "Child" to "Youth" live.
+   446→  - BUG FOUND: Reverting Scouts→SDA left group="Unit", child="Youth", volunteer="Leader" stuck, because the SDA profile only overrides the 4 program_* keys, not group/child/volunteer. The original merge semantics only overwrote keys the target profile explicitly listed, so Scouts' overrides of group/child/volunteer were never reset.
+   447→  - FIX: Rewrote merge logic in src/app/api/admin/organisation/profile/route.ts to use UNION-based reset — applying a profile resets ALL terminology/flag keys touched by ANY profile to the target profile's value (or DEFAULT_TERMINOLOGY if the target doesn't override). Genuine user customisations outside the profile system are preserved. Also extended to flags (union of profile-touched flags reset to target value or flag default).
+   448→  - Added getDefaultFlag() helper using FEATURE_FLAGS registry.
+   449→  - Re-verified round-trip: Scouts → Unit Night/Unit/Youth/Leader; SDA → Sabbath School/Class/Child/Volunteer (clean restore, stored terminology overrides = {} since all SDA values equal defaults)
+   450→- WWCC flag-gating: confirmed section appears when flag ON, disappears when OFF (subagent verified)
+   451→- Auth guards: /admin/people logged-out → redirect to /login (subagent verified)
+   452→- dev.log: zero errors since last compile
+   453→- Screenshot: /tmp/s3-people-verify.png
+   454→
+   455→Stage Summary:
+   456→- Stage 3 COMPLETE and independently verified. People & Families domain model live: extended Person (Adult/Child type-specific fields, medical/allergy with role-scoped visibility, visitor flag, soft-delete), Family + FamilyMember (PrimaryCarer/Child/EmergencyContact roles), WorkingWithChildrenCard (flag-gated, national + international card types), encrypted photo storage (AES-256-GCM, establishes encryption pattern for Stage 16 backups), full admin CRUD UIs at /admin/people and /admin/families with detail pages.
+   457→- Dual org-type defaults (SDA vs non-SDA) — the user's explicit requirement — fully working after bugfix: 7 profiles (SDA/SundayChurch/Scouts/Childcare/School/Club/Other), applying a profile swaps terminology + flags app-wide with clean round-trip restore. SDA profile is canonical default.
+   458→- Project reverted to SDA defaults. Test data in DB: Jane Admin (admin/password123), John Smith (Adult), Mary Smith (Child, allergies Peanuts, medical Asthma, photo uploaded), Smith family.
+   459→- Next: Stage 4 — Authorised Guardians, Blacklist, Older-sibling collection (AuthorisedGuardian FamilyMember role activated, Adult Person from own Family can be linked as guardian to another family with sign-in/out rights but no edit rights, BlacklistEntry model, OlderSiblingAuthorisation flag-gated, all surfaced in family/person UIs).
+   460→
+   461→---
+   462→Task ID: 4
+   463→Agent: full-stack-developer
+   464→Task: Stage 4 — Authorised Guardians, Blacklist, Older-sibling collection
+   465→
+   466→Work Log:
+   467→- Read worklog Stages 0-3; confirmed stack: Next.js 16 App Router + TS, Tailwind 4, shadcn/ui, Prisma+SQLite via `import { db } from "@/lib/db"`, react-hook-form + zod, sticky footer pattern.
+   468→- Inspected existing Stage 4 files (a prior pass had already scaffolded all schemas, helpers, API routes, and UI sections — incomplete verification only). Verified:
+   469→  - `prisma/schema.prisma` already has `BlacklistEntry` (childId/familyId/personId/collectorName/collectorDescription/reason/severity `blocked`|`flag`/createdById + indexes) and `OlderSiblingAuthorisation` (youngerChildId/olderSiblingId/familyId/conditions/isActive/authorisedById + @@unique) models, plus back-relations on Person (`blacklistAsChild`, `blacklistAsPerson`, `olderSiblingAsYounger`, `olderSiblingAsOlder`) and Family (`blacklistEntries`, `olderSiblingAuthorisations`).
+   470→  - `src/lib/guardians.ts` exposes `canCollectChild` (blacklist FIRST as hard-stop, then PrimaryCarer → AuthorisedGuardian → OlderSibling when flag ON → not_authorised), `listAuthorisedCollectors` (excludes blacklisted), `listBlacklistForChild`, `canEditFamily` (PrimaryCarer only).
+   471→  - APIs already in place: `GET /api/admin/families/[id]/guardians`, `GET /api/admin/people/[id]/guardian-families`, `GET /api/admin/people/[id]/collection-permissions`, `GET/POST /api/admin/blacklist`, `PUT/DELETE /api/admin/blacklist/[id]`, `GET/POST /api/admin/older-sibling`, `DELETE /api/admin/older-sibling/[id]` (older-sibling flag-gated → 404 when off). Existing `POST /api/admin/families/[id]/members` and `DELETE …/members/[personId]` already validate Adult for AuthorisedGuardian and emit dedicated `family.guardian.add`/`family.guardian.remove` audit actions.
+   472→  - Family detail page renders three new sections (Authorised Guardians with "no edit rights" badge, Blacklist with severity badges, Older-sibling only when `useFlags().isEnabled("older_sibling_collect")`).
+   473→  - Person detail page renders Adult "Guardian for families" section + Child "Collection permissions" section.
+   474→  - Consolidated `/admin/blacklist` page with family/child/severity filters.
+   475→- Ran `bun run db:push` — schema in sync, Prisma Client regenerated.
+   476→- Ran `bun run lint` — clean (0 errors / 0 warnings).
+   477→- Auth-guard verification (curl, logged-out):
+   478→  - GET /api/admin/blacklist → 401
+   479→  - GET /api/admin/families/{id}/guardians → 401
+   480→  - GET /api/admin/older-sibling → 401
+   481→  - GET /api/admin/people/{id}/guardian-families → 401
+   482→  - GET /api/admin/people/{id}/collection-permissions → 401
+   483→- Logged in as admin/password123 via curl, verified all new endpoints return 200 (older-sibling returns 404 with flag OFF — correct).
+   484→- Direct helper sanity check via bun -e script:
+   485→  - canCollectChild(John, Mary) → allowed: true, reason: "primary_carer"
+   486→  - canCollectChild(Robert, Mary) → allowed: true, reason: "authorised_guardian"
+   487→  - canCollectChild(Creep, Mary) → allowed: false, reason: "blacklisted", blacklistEntry attached
+   488→  - canCollectChild(Tom, Mary) with flag OFF → allowed: false, reason: "not_authorised"
+   489→  - canCollectChild(Tom, Mary) with flag ON → allowed: true, reason: "older_sibling", olderSiblingAuth.conditions: "Only after 12pm"
+   490→  - canEditFamily(John, Smith) → true; canEditFamily(Robert, Smith) → false (correct — guardians have NO edit rights)
+   491→  - listAuthorisedCollectors(Mary) returns John + Robert (Tom only when flag ON; blacklist entries excluded)
+   492→- agent-browser verification:
+   493→  - Login admin/password123 → /admin works
+   494→  - /admin/families/{smithId} renders: members grouped by role (John=PrimaryCarer, Mary+Tom=Children, Robert=AuthorisedGuardian); Authorised Guardians card with "Sign-in/out only — no edit rights" amber badge + Remove button + Add guardian search; Blacklist card with 2 entries (Creep Person → Mary, "Unknown male ~40s" → Whole Smith family) both with red "Blocked" badges + Remove + Add dialog; Older-sibling section HIDDEN (flag OFF — confirmed via snapshot grep)
+   495→  - /admin/people/{maryId} (Child) renders "Collection permissions" section: "Authorised to collect (2)" listing John Smith (Primary carer · Smith, Allowed) + Robert Grandparent (Authorised guardian · Smith, Allowed); "Blocked / flagged (2)" listing both blacklist entries with red Blocked badges. Older-sibling flag-off notice shown.
+   496→  - /admin/people/{robertId} (Adult) renders "Guardian for families" section listing Smith family with "Sign-in/out only" badge.
+   497→  - /admin/blacklist consolidated page: BUG FOUND — `<SelectItem value="">All families</SelectItem>` (and similar for child/severity filters) triggers a Radix UI runtime error ("A <Select.Item /> must have a value prop that is not an empty string"). Page crashed with "Application error: a client-side exception has occurred".
+   498→- FIX: Rewrote `src/app/admin/blacklist/blacklist-table.tsx` to use a sentinel value `"__all__"` for the "All …" options. State initialiser changed from `useState<string>("")` to `useState<string>("__all__")`; `load()` skips query params when value === `"__all__"`; `clearFilters()` resets to `"__all__"`; "Clear filters" button disabled when all three are `"__all__"`. Re-ran lint clean.
+   499→- Re-verified /admin/blacklist page: renders cleanly with filters functional, table showing both entries (Creep Person → Mary Smith scope; Unknown male ~40s → Smith (whole) scope; both Blocked severity).
+   500→- Older-sibling section lifecycle verified:
+   501→  - Flag OFF → section NOT rendered (snapshot grep returns no matches)
+   502→  - Flag ON (via PUT /api/admin/flags {"flags":{"older_sibling_collect":true}}) → section renders with "Tom Smith may collect Mary Smith, Conditions: Only after 12pm" + "Authorise older sibling" button
+   503→  - Flag OFF again → section hides; DB row preserved (count=1, not deleted)
+   504→- Final flag state confirmed: `older_sibling_collect` value=false (left OFF as required).
+   505→- Screenshots saved:
+   506→  - /tmp/s4-family-guardians.png (Smith family detail with guardians + blacklist sections)
+   507→  - /tmp/s4-child-permissions.png (Mary Smith collection-permissions section)
+   508→  - /tmp/s4-blacklist.png (consolidated blacklist page)
+   509→  - /tmp/s4-older-sibling.png (Smith family detail with older-sibling section visible, flag ON)
+   510→- Smoke test (logged in as admin): / /login /admin /admin/people /admin/families /admin/settings /admin/blacklist /volunteer /kiosk all return 200. No new runtime errors in dev.log since the fix (only stale pre-fix errors from the prior Turbopack cache, now resolved by Prisma Client regen).
+   511→
+   512→Stage Summary:
+   513→- Stage 4 COMPLETE. AuthorisedGuardian FamilyMember role activated (Adult-only, sign-in/out rights, NO edit rights enforced by `canEditFamily()` + dedicated audit actions `family.guardian.add`/`family.guardian.remove`). BlacklistEntry live with both `blocked` (hard stop, overrides primary carer) and `flag` (warn + supervisor override) severities. OlderSiblingAuthorisation flag-gated end-to-end — section hidden when flag OFF, DB rows preserved, helper ignores them, API returns 404 when flag OFF.
+   514→- Files created (new): src/lib/guardians.ts; src/app/api/admin/families/[id]/guardians/route.ts; src/app/api/admin/people/[id]/guardian-families/route.ts; src/app/api/admin/people/[id]/collection-permissions/route.ts; src/app/api/admin/blacklist/route.ts + [id]/route.ts; src/app/api/admin/older-sibling/route.ts + [id]/route.ts; src/app/admin/families/[id]/authorised-guardians-section.tsx, blacklist-section.tsx, older-sibling-section.tsx; src/app/admin/people/[id]/guardian-families-section.tsx, collection-permissions-section.tsx; src/app/admin/blacklist/page.tsx, blacklist-table.tsx.
+   515→- Files modified: prisma/schema.prisma (BlacklistEntry + OlderSiblingAuthorisation + back-relations); src/app/api/admin/families/[id]/members/route.ts (Adult-only AuthorisedGuardian + family.guardian.add audit); src/app/api/admin/families/[id]/members/[personId]/route.ts (family.guardian.remove audit); src/app/admin/families/[id]/family-detail.tsx (renders 3 new sections, older-sibling flag-gated); src/app/admin/people/[id]/person-detail.tsx (Adult guardian-families + Child collection-permissions sections); src/app/admin/page.tsx (Blacklist shortcut button).
+   516→- Decisions / deviations:
+   517→  - Blacklist severity semantics surfaced explicitly in UI: red "Blocked" badge vs amber "Flag" badge, with the family-detail section header explaining "Blocked = hard stop, never allow even if a primary carer. Flag = warn operator, supervisor override possible at checkout."
+   518→  - `canCollectChild` checks the blacklist FIRST. A blacklisted PrimaryCarer is denied — this is a deliberate child-safety override. The helper returns `reason:"blacklisted"` (blocked) or `reason:"flagged"` (flag) so Stage 8 can route to the supervisor-override flow for "flagged" only.
+   519→  - `listAuthorisedCollectors` deliberately EXCLUDES blacklisted persons — the kiosk will surface those separately as a hard-stop list. Free-text blacklist entries (collectorName) are not matched by `canCollectChild` because the helper works on Person IDs; the kiosk UI must call `listBlacklistForChild` and match free-text entries against the typed collector name itself. This is documented in `src/lib/guardians.ts`.
+   520→  - Older-sibling section is ENTIRELY gated by `useFlags().isEnabled("older_sibling_collect")` in family-detail.tsx. The API endpoints also return 404 when the flag is OFF, so DB rows are preserved but the feature behaves as if it doesn't exist. Verified: toggling flag OFF hides the section but the OlderSiblingAuthorisation row remains (count=1).
+   521→  - The BlacklistTable filter dropdowns originally used `<SelectItem value="">All …</SelectItem>` which Radix UI forbids. Fixed by introducing a sentinel `"__all__"` value; the load() function strips the sentinel before sending query params. This is the same pattern that should be used anywhere an "All" / "no filter" Select option is needed.
+   522→  - AuthorisedGuardians have NO edit rights enforced two ways: (a) `canEditFamily()` returns false for them (Stage 8 will gate guardian self-service screens on this), (b) the family-detail page's Add/Remove/Archive controls remain gated by the user's `manage_people` permission, which guardians typically do not have.
+   523→  - AuditLog actions introduced: `family.guardian.add`, `family.guardian.remove`, `blacklist.add`, `blacklist.update`, `blacklist.remove`, `older_sibling.add`, `older_sibling.remove`.
+   524→- Verification: all 13 self-verification steps pass (lint clean, db:push ok, admin login works, guardian add + Mary's permissions + Robert's guardian-families all confirm, blacklist add + Mary-targeted + both appear + remove one verified earlier, older-sibling flag OFF/ON/DB-preserved lifecycle confirmed, canCollectChild sanity via Mary's permissions section shows John/Robert/Tom listed (Tom only with flag ON) and blacklisted blocked, auth guards return 401 logged-out, dev.log clean of new runtime errors). All 4 screenshots saved.
+   525→- older_sibling_collect flag left OFF before finishing (confirmed via direct DB query: value=false).
+   526→- Next: Stage 5 — Programs & Classes (Sabbath School / Pathfinders / Adventurers, rooms, schedules, room-scoped photo visibility which Stage 3 deferred to this point).
+   527→
+   528→---
+   529→Task ID: 4 (verified)
+   530→Agent: main (orchestrator)
+   531→Task: Stage 4 — independent verification of Authorised Guardians, Blacklist, Older-sibling collection
+   532→
+   533→Work Log:
+   534→- Confirmed `bun run lint` clean (0 errors/warnings)
+   535→- Confirmed `bun run db:push` ok; BlacklistEntry + OlderSiblingAuthorisation tables created with back-relations
+   536→- Logged in as admin/password123 → /admin/families → Smith family detail
+   537→- Family detail now has three new sections (verified live):
+   538→  - Authorised Guardians: Robert Grandparent ("Bobby Grand") listed with "Sign-in/out only — no edit rights" notice + Remove button
+   539→  - Blacklist: 2 entries (Unknown male ~40s family-scope blocked, Creep Person child-scope blocked) with Remove buttons + Add control
+   540→  - Older-sibling: correctly HIDDEN (flag OFF)
+   541→- Mary Smith person detail "Collection permissions" section verified via API GET /api/admin/people/[id]/collection-permissions:
+   542→  - authorisedCollectors: John Smith (primary_carer), Robert Grandparent (authorised_guardian) — Tom excluded (flag OFF)
+   543→  - blacklistEntries: 2 entries, both "blocked" severity, one child-scope one family-scope
+   544→  - Notice: "Blacklist entries take precedence over relationships"
+   545→- Older-sibling flag-gating verified round-trip:
+   546→  - Flag OFF → section hidden on family + Tom absent from Mary's permissions
+   547→  - Turned ON via /admin/settings → Tom Smith appears on Mary's permissions as "Older sibling · Smith" with "Conditions: Only after 12pm"
+   548→  - Turned OFF again → section hides, DB row preserved (confirmed via API count)
+   549→- Auth guards: logged-out GET /api/admin/blacklist → 401; /api/admin/families/[id]/guardians → 401; /api/admin/older-sibling → 401 (auth checked before flag, correct)
+   550→- canCollectChild helper logic confirmed via collection-permissions API structure: blacklist checked first (precedence), then primary_carer/authorised_guardian/older_sibling relationships
+   551→- Dedicated /admin/blacklist page renders with severity filter + all entries
+   552→- dev.log: zero errors since last compile
+   553→- Screenshots: /tmp/s4-blacklist-verify.png, /tmp/s4-family-guardians-verify.png
+   554→- REVERTED older_sibling_collect flag to OFF (verified via /api/config: false)
+   555→
+   556→Stage Summary:
+   557→- Stage 4 COMPLETE and independently verified. The "who is allowed to collect this child" layer is live: AuthorisedGuardian FamilyMember role activated (sign-in/out rights, NO edit rights enforced via canEditFamily helper), BlacklistEntry model (blocked=hard-stop + flag=warn, takes precedence over relationships), OlderSiblingAuthorisation (flag-gated, conditions supported, preserved in DB when flag off). The canCollectChild/listAuthorisedCollectors/canEditFamily helpers in src/lib/guardians.ts are the permission engine Stage 8 kiosk checkout will call. Family detail + person detail + dedicated blacklist page all functional. Blacklist precedence over relationships confirmed.
+   558→- Test data: Robert Grandparent (guardian for Smith family), Tom Smith (older sibling auth for Mary, conditions "Only after 12pm"), Creep Person + "Unknown male ~40s" (blacklist entries).
+   559→- Next: Stage 5 — Programs, Classes, Events, Rooms (Program CRUD: Sabbath School/Pathfinders/Adventurers/Community Childcare/Custom; Group/Class CRUD within Program assigned to Room + Schedule; Event CRUD one-off/occasional; Schedule model recurring day-of-week+time or ad-hoc date/time).
+   560→

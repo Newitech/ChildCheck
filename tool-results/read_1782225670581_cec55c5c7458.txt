@@ -1,0 +1,1332 @@
+     1→"use client";
+     2→
+     3→import { useEffect, useState } from "react";
+     4→import Link from "next/link";
+     5→import { useRouter } from "next/navigation";
+     6→import { toast } from "sonner";
+     7→import {
+     8→  ArrowLeft,
+     9→  Loader2,
+    10→  Baby,
+    11→  AlertTriangle,
+    12→  HeartPulse,
+    13→  ShieldCheck,
+    14→  CheckCircle2,
+    15→  KeyRound,
+    16→  Lock,
+    17→  Delete,
+    18→  Search,
+    19→  UserCheck,
+    20→  Camera,
+    21→  ShieldAlert,
+    22→} from "lucide-react";
+    23→
+    24→import { Button } from "@/components/ui/button";
+    25→import { Checkbox } from "@/components/ui/checkbox";
+    26→import { Badge } from "@/components/ui/badge";
+    27→import {
+    28→  Card,
+    29→  CardContent,
+    30→  CardDescription,
+    31→  CardHeader,
+    32→  CardTitle,
+    33→} from "@/components/ui/card";
+    34→import { Input } from "@/components/ui/input";
+    35→import { Label } from "@/components/ui/label";
+    36→import { Textarea } from "@/components/ui/textarea";
+    37→import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+    38→import { useTerminology } from "@/hooks/use-terminology";
+    39→
+    40→// ---------------------------------------------------------------------------
+    41→// Types — mirror the server-side DTOs in ./page.tsx
+    42→// ---------------------------------------------------------------------------
+    43→
+    44→export interface CheckoutFlowChild {
+    45→  id: string;
+    46→  firstName: string;
+    47→  lastName: string;
+    48→  preferredName: string | null;
+    49→  ageYears: number | null;
+    50→  schoolGrade: string | null;
+    51→  allergies: string | null;
+    52→  medicalNotes: string | null;
+    53→  hasPhoto: boolean;
+    54→  checkInRecordId: string | null;
+    55→  checkedOutAt: string | null;
+    56→  checkoutMethod: string | null;
+    57→  className: string | null;
+    58→  roomName: string | null;
+    59→}
+    60→
+    61→export interface CheckoutFlowAdult {
+    62→  id: string;
+    63→  firstName: string;
+    64→  lastName: string;
+    65→  role: string;
+    66→  hasPhoto: boolean;
+    67→}
+    68→
+    69→export interface CheckoutFlowProps {
+    70→  familyId: string;
+    71→  familyName: string;
+    72→  todayLabel: string;
+    73→  children: CheckoutFlowChild[];
+    74→  adults: CheckoutFlowAdult[];
+    75→  guardianPinSignin: boolean;
+    76→  overrideCheckout: boolean;
+    77→  photoVerification: boolean;
+    78→  isStaff: boolean;
+    79→  staffName: string | null;
+    80→  dailyCodeLength: number;
+    81→  dailyCodeCharset: "alphanumeric" | "numeric";
+    82→}
+    83→
+    84→type Method = "code" | "pin" | "override";
+    85→
+    86→interface BlockedChild {
+    87→  childPersonId: string;
+    88→  reason: "blacklisted" | "flagged_requires_override" | "not_authorised";
+    89→  blacklistEntryId?: string;
+    90→  blacklistReason?: string;
+    91→  severity?: string;
+    92→}
+    93→interface CheckedOutChild {
+    94→  childPersonId: string;
+    95→  checkInRecordId: string;
+    96→  method: string;
+    97→  collectorPersonId: string | null;
+    98→}
+    99→interface SkippedChild {
+   100→  childPersonId: string;
+   101→  reason: "already_checked_out";
+   102→}
+   103→interface CheckoutResult {
+   104→  ok: boolean;
+   105→  checkedOut: CheckedOutChild[];
+   106→  skipped: SkippedChild[];
+   107→  blocked: BlockedChild[];
+   108→}
+   109→
+   110→interface PersonSearchHit {
+   111→  id: string;
+   112→  firstName: string;
+   113→  lastName: string;
+   114→  personType: string;
+   115→}
+   116→
+   117→// ---------------------------------------------------------------------------
+   118→// Component
+   119→// ---------------------------------------------------------------------------
+   120→
+   121→export function CheckoutFlow({
+   122→  familyId,
+   123→  familyName,
+   124→  todayLabel,
+   125→  children: childList,
+   126→  adults,
+   127→  guardianPinSignin,
+   128→  overrideCheckout,
+   129→  photoVerification,
+   130→  isStaff,
+   131→  staffName,
+   132→  dailyCodeLength,
+   133→  dailyCodeCharset,
+   134→}: CheckoutFlowProps) {
+   135→  const router = useRouter();
+   136→  const { t } = useTerminology();
+   137→
+   138→  // Default method: code if available, otherwise PIN, otherwise override.
+   139→  const defaultMethod: Method = overrideCheckout && isStaff ? "override" : guardianPinSignin ? "pin" : "code";
+   140→  const [method, setMethod] = useState<Method>(defaultMethod);
+   141→
+   142→  // Children selection — default to all currently-checked-in (not yet
+   143→  // checked-out) children selected.
+   144→  const initiallyCheckedIn = childList.filter((c) => c.checkInRecordId && !c.checkedOutAt);
+   145→  const [selectedChildIds, setSelectedChildIds] = useState<Set<string>>(
+   146→    () => new Set(initiallyCheckedIn.map((c) => c.id)),
+   147→  );
+   148→
+   149→  // Photo-verification checkbox state.
+   150→  const [photoVerified, setPhotoVerified] = useState(false);
+   151→
+   152→  // PIN method state.
+   153→  const [pinEntry, setPinEntry] = useState("");
+   154→  const [verifiedGuardian, setVerifiedGuardian] = useState<{
+   155→    personId: string;
+   156→    name: string;
+   157→  } | null>(null);
+   158→  const [verifyingPin, setVerifyingPin] = useState(false);
+   159→
+   160→  // Override method state.
+   161→  const [overrideCollectorMode, setOverrideCollectorMode] = useState<"person" | "freetext">(
+   162→    "person",
+   163→  );
+   164→  const [collectorPersonId, setCollectorPersonId] = useState<string | null>(null);
+   165→  const [collectorSearchQuery, setCollectorSearchQuery] = useState("");
+   166→  const [collectorSearchHits, setCollectorSearchHits] = useState<PersonSearchHit[]>([]);
+   167→  const [collectorSearchLoading, setCollectorSearchLoading] = useState(false);
+   168→  const [collectorName, setCollectorName] = useState("");
+   169→  const [overrideNote, setOverrideNote] = useState("");
+   170→  const [overrideConfirmed, setOverrideConfirmed] = useState(false);
+   171→
+   172→  // Submission state.
+   173→  const [submitting, setSubmitting] = useState(false);
+   174→  const [result, setResult] = useState<CheckoutResult | null>(null);
+   175→
+   176→  // ---------------------------------------------------------------
+   177→  // Refs / effects
+   178→  // ---------------------------------------------------------------
+   179→  // Reset photo-verified when method changes or selection changes.
+   180→  useEffect(() => {
+   181→    setPhotoVerified(false);
+   182→  }, [method, selectedChildIds]);
+   183→
+   184→  // ---------------------------------------------------------------
+   185→  // Selection helpers
+   186→  // ---------------------------------------------------------------
+   187→  function toggleChild(id: string) {
+   188→    setSelectedChildIds((prev) => {
+   189→      const next = new Set(prev);
+   190→      if (next.has(id)) next.delete(id);
+   191→      else next.add(id);
+   192→      return next;
+   193→    });
+   194→  }
+   195→
+   196→  // Children that are currently checked in AND not yet checked out.
+   197→  const checkedInChildren = childList.filter((c) => c.checkInRecordId && !c.checkedOutAt);
+   198→  const checkedOutChildren = childList.filter((c) => c.checkedOutAt);
+   199→
+   200→  const selectedChildren = checkedInChildren.filter((c) => selectedChildIds.has(c.id));
+   201→  const selectedCount = selectedChildren.length;
+   202→
+   203→  // ---------------------------------------------------------------
+   204→  // Guardian PIN verification flow (re-uses /api/kiosk/guardian-signin).
+   205→  // ---------------------------------------------------------------
+   206→  async function verifyPin() {
+   207→    if (pinEntry.length < 4) {
+   208→      toast.error("Enter a 4–6 digit PIN");
+   209→      return;
+   210→    }
+   211→    setVerifyingPin(true);
+   212→    try {
+   213→      const res = await fetch("/api/kiosk/guardian-signin", {
+   214→        method: "POST",
+   215→        headers: { "Content-Type": "application/json" },
+   216→        body: JSON.stringify({ familyId, pin: pinEntry }),
+   217→      });
+   218→      const data = (await res.json().catch(() => ({}))) as {
+   219→        ok?: boolean;
+   220→        personId?: string;
+   221→        name?: { firstName: string; lastName: string };
+   222→        role?: string;
+   223→        error?: string;
+   224→        retryAfterMs?: number;
+   225→      };
+   226→      if (!res.ok || !data.ok) {
+   227→        if (res.status === 429) {
+   228→          toast.error("Too many attempts", {
+   229→            description: "Please wait a minute and try again.",
+   230→          });
+   231→        } else if (data.error === "pin_signin_disabled") {
+   232→          toast.error("PIN sign-in disabled");
+   233→          setMethod("code");
+   234→        } else {
+   235→          toast.error("Incorrect PIN", { description: "Please try again." });
+   236→        }
+   237→        return;
+   238→      }
+   239→      setVerifiedGuardian({
+   240→        personId: data.personId!,
+   241→        name: `${data.name!.firstName} ${data.name!.lastName}`,
+   242→      });
+   243→      setCollectorPersonId(data.personId!);
+   244→      toast.success("PIN verified", {
+   245→        description: `Signed in as ${data.name!.firstName} ${data.name!.lastName}.`,
+   246→      });
+   247→    } catch (e) {
+   248→      console.error("[guardian-signin] error:", e);
+   249→      toast.error("Network error — please try again.");
+   250→    } finally {
+   251→      setVerifyingPin(false);
+   252→    }
+   253→  }
+   254→
+   255→  function clearPin() {
+   256→    setPinEntry("");
+   257→    setVerifiedGuardian(null);
+   258→    setCollectorPersonId(null);
+   259→  }
+   260→
+   261→  function pressPin(d: string) {
+   262→    setPinEntry((p) => (p.length >= 8 ? p : p + d));
+   263→  }
+   264→  function backspacePin() {
+   265→    setPinEntry((p) => p.slice(0, -1));
+   266→  }
+   267→
+   268→  // ---------------------------------------------------------------
+   269→  // Collector search for the override method (Admin/Teacher can search
+   270→  // any Person in the DB to identify the collector).
+   271→  // ---------------------------------------------------------------
+   272→  useEffect(() => {
+   273→    if (method !== "override" || overrideCollectorMode !== "person") return;
+   274→    const q = collectorSearchQuery.trim();
+   275→    if (q.length < 2) {
+   276→      setCollectorSearchHits([]);
+   277→      return;
+   278→    }
+   279→    setCollectorSearchLoading(true);
+   280→    const ctrl = new AbortController();
+   281→    const t = setTimeout(async () => {
+   282→      try {
+   283→        const res = await fetch(
+   284→          `/api/admin/people?q=${encodeURIComponent(q)}&pageSize=10`,
+   285→          { signal: ctrl.signal },
+   286→        );
+   287→        if (!res.ok) {
+   288→          setCollectorSearchHits([]);
+   289→          return;
+   290→        }
+   291→        const data = (await res.json()) as { items: PersonSearchHit[] };
+   292→        setCollectorSearchHits(data.items);
+   293→      } catch {
+   294→        // ignore — likely aborted
+   295→      } finally {
+   296→        setCollectorSearchLoading(false);
+   297→      }
+   298→    }, 250);
+   299→    return () => {
+   300→      ctrl.abort();
+   301→      clearTimeout(t);
+   302→    };
+   303→  }, [method, overrideCollectorMode, collectorSearchQuery]);
+   304→
+   305→  // ---------------------------------------------------------------
+   306→  // Submit check-out.
+   307→  // ---------------------------------------------------------------
+   308→  function validate(): string | null {
+   309→    if (selectedCount === 0) {
+   310→      return `Please select at least one ${t("child").toLowerCase()} to check out.`;
+   311→    }
+   312→    if (method === "code") {
+   313→      if (codeEntry.trim().length === 0) return "Enter the daily code.";
+   314→    }
+   315→    if (method === "pin") {
+   316→      if (!verifiedGuardian) return "Verify your PIN before checking out.";
+   317→    }
+   318→    if (method === "override") {
+   319→      if (!overrideConfirmed)
+   320→        return "You must tick the confirmation checkbox to override.";
+   321→      if (overrideNote.trim().length < 10)
+   322→        return "Override note must be at least 10 characters.";
+   323→      if (overrideCollectorMode === "person" && !collectorPersonId)
+   324→        return "Pick a collector from the search results (or switch to free-text name).";
+   325→      if (overrideCollectorMode === "freetext" && collectorName.trim().length < 2)
+   326→        return "Enter the collector's name.";
+   327→    }
+   328→    if (photoVerification && !photoVerified) {
+   329→      return "Please tick the photo verification checkbox.";
+   330→    }
+   331→    return null;
+   332→  }
+   333→
+   334→  async function submit() {
+   335→    const verr = validate();
+   336→    if (verr) {
+   337→      toast.error("Missing details", { description: verr });
+   338→      return;
+   339→    }
+   340→    setSubmitting(true);
+   341→    try {
+   342→      const payload: Record<string, unknown> = {
+   343→        familyId,
+   344→        childPersonIds: selectedChildren.map((c) => c.id),
+   345→        method,
+   346→        photoVerified: photoVerification ? photoVerified : null,
+   347→      };
+   348→      if (method === "code") {
+   349→        payload.code = codeEntry.trim();
+   350→      }
+   351→      if (method === "pin") {
+   352→        payload.collectorPersonId = verifiedGuardian?.personId ?? null;
+   353→      }
+   354→      if (method === "override") {
+   355→        payload.collectorPersonId =
+   356→          overrideCollectorMode === "person" ? collectorPersonId : null;
+   357→        payload.collectorName =
+   358→          overrideCollectorMode === "freetext" ? collectorName.trim() : null;
+   359→        payload.overrideNote = overrideNote.trim();
+   360→        payload.overrideConfirmed = overrideConfirmed;
+   361→      }
+   362→      const res = await fetch("/api/kiosk/checkout", {
+   363→        method: "POST",
+   364→        headers: { "Content-Type": "application/json" },
+   365→        body: JSON.stringify(payload),
+   366→      });
+   367→      const data = (await res.json().catch(() => ({}))) as CheckoutResult & {
+   368→        error?: string;
+   369→        message?: string;
+   370→      };
+   371→      if (!res.ok || !data.ok) {
+   372→        if (data.error === "invalid_code") {
+   373→          toast.error("Wrong code", {
+   374→            description: "The code you entered does not match today's code for this family.",
+   375→          });
+   376→        } else if (data.error === "rate_limited") {
+   377→          toast.error("Too many attempts", {
+   378→            description: "Please wait a minute and try again.",
+   379→          });
+   380→        } else if (data.error === "photo_verification_required") {
+   381→          toast.error("Photo verification required", {
+   382→            description: "Tick the photo verification checkbox first.",
+   383→          });
+   384→        } else if (data.error === "override_note_required") {
+   385→          toast.error("Override note too short", {
+   386→            description: "Please enter at least 10 characters explaining the override.",
+   387→          });
+   388→        } else if (data.error === "override_confirmation_required") {
+   389→          toast.error("Confirmation required", {
+   390→            description: "You must tick the confirmation checkbox to override.",
+   391→          });
+   392→        } else if (data.error === "override_disabled") {
+   393→          toast.error("Override disabled", {
+   394→            description: "An admin must enable the override_checkout flag.",
+   395→          });
+   396→        } else if (data.error === "unauthorized") {
+   397→          toast.error("Sign in required", {
+   398→            description: "Sign in as Admin / Teacher / Security to use override.",
+   399→          });
+   400→        } else if (data.error === "forbidden") {
+   401→          toast.error("Not authorised", { description: data.message ?? "" });
+   402→        } else {
+   403→          toast.error("Check-out failed", {
+   404→            description: data.error ?? `Request failed (${res.status})`,
+   405→          });
+   406→        }
+   407→        return;
+   408→      }
+   409→      setResult(data);
+   410→      if (data.blocked.length > 0) {
+   411→        toast.error(`${data.blocked.length} child(ren) blocked`, {
+   412→          description: "See the alert below — security has been alerted.",
+   413→        });
+   414→      } else {
+   415→        const skipMsg =
+   416→          data.skipped.length > 0
+   417→            ? ` · ${data.skipped.length} already checked out`
+   418→            : "";
+   419→        toast.success("Checked out!", {
+   420→          description: `${data.checkedOut.length} ${
+   421→            data.checkedOut.length === 1
+   422→              ? t("child").toLowerCase()
+   423→              : t("child_plural").toLowerCase()
+   424→          } signed out${skipMsg}.`,
+   425→        });
+   426→      }
+   427→    } catch (e) {
+   428→      console.error("[checkout] error:", e);
+   429→      toast.error("Network error — please try again.");
+   430→    } finally {
+   431→      setSubmitting(false);
+   432→    }
+   433→  }
+   434→
+   435→  // ---------------------------------------------------------------
+   436→  // Code input state
+   437→  // ---------------------------------------------------------------
+   438→  const [codeEntry, setCodeEntry] = useState("");
+   439→
+   440→  // Auto-uppercase + filter for the code input.
+   441→  function onCodeChange(v: string) {
+   442→    const charset =
+   443→      dailyCodeCharset === "numeric"
+   444→        ? /[^0-9]/g
+   445→        : /[^A-Za-z0-9]/g;
+   446→    setCodeEntry(v.toUpperCase().replace(charset, "").slice(0, dailyCodeLength));
+   447→  }
+   448→
+   449→  // ---------------------------------------------------------------
+   450→  // SUCCESS SCREEN (with optional blocked alert)
+   451→  // ---------------------------------------------------------------
+   452→  if (result) {
+   453→    return (
+   454→      <div className="flex-1 flex flex-col">
+   455→        <div className="mx-auto w-full max-w-3xl px-4 sm:px-6 py-6 flex-1 flex flex-col gap-6 pb-28">
+   456→          {/* Blocked alert (prominent, red) — happens when blacklist hard-stop fires */}
+   457→          {result.blocked.length > 0 && (
+   458→            <Alert variant="destructive">
+   459→              <ShieldAlert className="h-5 w-5" />
+   460→              <AlertTitle className="text-base">
+   461→                BLOCKED — Security has been alerted
+   462→              </AlertTitle>
+   463→              <AlertDescription>
+   464→                <p className="mb-2">
+   465→                  The following {t("child").toLowerCase()}(ren) could NOT be
+   466→                  checked out because the collector is on the blacklist:
+   467→                </p>
+   468→                <ul className="space-y-1">
+   469→                  {result.blocked.map((b) => {
+   470→                    const child = childList.find((c) => c.id === b.childPersonId);
+   471→                    return (
+   472→                      <li key={b.childPersonId} className="font-medium">
+   473→                        {child ? `${child.firstName} ${child.lastName}` : b.childPersonId}
+   474→                        {" — "}
+   475→                        {b.reason === "blacklisted" && (
+   476→                          <span className="text-destructive">
+   477→                            blocked (hard-stop, never overridable)
+   478→                          </span>
+   479→                        )}
+   480→                        {b.reason === "flagged_requires_override" && (
+   481→                          <span>flagged — use Override tab</span>
+   482→                        )}
+   483→                        {b.reason === "not_authorised" && (
+   484→                          <span>not authorised — use Override tab</span>
+   485→                        )}
+   486→                      </li>
+   487→                    );
+   488→                  })}
+   489→                </ul>
+   490→                <p className="text-xs mt-2">
+   491→                  A <code>checkout.blocked</code> entry has been written to the
+   492→                  audit log. Stage 9 will surface this to Security in real time.
+   493→                </p>
+   494→              </AlertDescription>
+   495→            </Alert>
+   496→          )}
+   497→
+   498→          <div className="text-center space-y-2">
+   499→            <div
+   500→              className={`mx-auto inline-flex h-16 w-16 items-center justify-center rounded-2xl ${
+   501→                result.checkedOut.length > 0
+   502→                  ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+   503→                  : "bg-muted text-muted-foreground"
+   504→              }`}
+   505→            >
+   506→              <CheckCircle2 className="h-9 w-9" />
+   507→            </div>
+   508→            <h1 className="text-3xl font-bold tracking-tight">
+   509→              {result.checkedOut.length > 0
+   510→                ? `${result.checkedOut.length} ${
+   511→                    result.checkedOut.length === 1
+   512→                      ? t("child").toLowerCase()
+   513→                      : t("child_plural").toLowerCase()
+   514→                  } signed out`
+   515→                : "Check-out complete"}
+   516→            </h1>
+   517→            <p className="text-sm text-muted-foreground">{todayLabel}</p>
+   518→          </div>
+   519→
+   520→          {result.checkedOut.length > 0 && (
+   521→            <Card>
+   522→              <CardHeader className="pb-2">
+   523→                <CardTitle className="text-base">
+   524→                  {t("child_plural")} signed out
+   525→                </CardTitle>
+   526→                <CardDescription className="text-xs">
+   527→                  {result.checkedOut.length} signed out
+   528→                  {result.skipped.length > 0
+   529→                    ? ` · ${result.skipped.length} already out`
+   530→                    : ""}
+   531→                  {result.blocked.length > 0
+   532→                    ? ` · ${result.blocked.length} blocked`
+   533→                    : ""}
+   534→                </CardDescription>
+   535→              </CardHeader>
+   536→              <CardContent className="pt-0 space-y-2">
+   537→                {result.checkedOut.map((c) => {
+   538→                  const child = childList.find((cl) => cl.id === c.childPersonId);
+   539→                  return (
+   540→                    <div
+   541→                      key={c.childPersonId}
+   542→                      className="flex items-center justify-between rounded-lg border bg-muted/30 p-3"
+   543→                    >
+   544→                      <div className="flex items-center gap-2 min-w-0">
+   545→                        <Baby className="h-4 w-4 text-primary shrink-0" />
+   546→                        <span className="font-medium truncate">
+   547→                          {child ? `${child.firstName} ${child.lastName}` : c.childPersonId}
+   548→                        </span>
+   549→                      </div>
+   550→                      <span className="text-xs text-muted-foreground shrink-0 uppercase tracking-wide">
+   551→                        {c.method}
+   552→                      </span>
+   553→                    </div>
+   554→                  );
+   555→                })}
+   556→                {result.skipped.length > 0 && (
+   557→                  <p className="text-xs text-muted-foreground px-1 pt-1">
+   558→                    {result.skipped.length} already checked out — not duplicated.
+   559→                  </p>
+   560→                )}
+   561→              </CardContent>
+   562→            </Card>
+   563→          )}
+   564→
+   565→          <Button
+   566→            className="h-16 text-base w-full"
+   567→            size="lg"
+   568→            onClick={() => router.push(`/kiosk/family/${familyId}`)}
+   569→          >
+   570→            Done — back to family
+   571→          </Button>
+   572→          <Button asChild variant="ghost" size="sm" className="h-12">
+   573→            <Link href="/kiosk">Back to search</Link>
+   574→          </Button>
+   575→        </div>
+   576→      </div>
+   577→    );
+   578→  }
+   579→
+   580→  // ---------------------------------------------------------------
+   581→  // CHECK-OUT FORM SCREEN
+   582→  // ---------------------------------------------------------------
+   583→  // Photo verification block (only shown if flag ON and at least one
+   584→  // selected child has a photo OR the collector has a photo).
+   585→  const showPhotoBlock = photoVerification && selectedCount > 0;
+   586→  // Selected children with photos.
+   587→  const photoChildren = selectedChildren;
+   588→
+   589→  return (
+   590→    <div className="flex-1 flex flex-col">
+   591→      <div className="mx-auto w-full max-w-3xl px-4 sm:px-6 py-6 flex-1 flex flex-col gap-5 pb-28">
+   592→        <div>
+   593→          <Button asChild variant="ghost" size="sm" className="h-12 -ml-2 text-muted-foreground">
+   594→            <Link href={`/kiosk/family/${familyId}`}>
+   595→              <ArrowLeft className="mr-1.5 h-5 w-5" /> Back to {familyName}
+   596→            </Link>
+   597→          </Button>
+   598→        </div>
+   599→
+   600→        <div className="flex items-center gap-3">
+   601→          <span className="inline-flex h-14 w-14 items-center justify-center rounded-xl bg-primary/10 text-primary shrink-0">
+   602→            <ShieldCheck className="h-7 w-7" />
+   603→          </span>
+   604→          <div className="min-w-0">
+   605→            <h1 className="text-3xl font-bold tracking-tight truncate">
+   606→              Check out — {familyName}
+   607→            </h1>
+   608→            <p className="text-sm text-muted-foreground">{todayLabel}</p>
+   609→          </div>
+   610→        </div>
+   611→
+   612→        {/* Method selector */}
+   613→        <Card>
+   614→          <CardHeader className="pb-3">
+   615→            <CardTitle className="text-base flex items-center gap-2">
+   616→              <KeyRound className="h-4 w-4 text-primary" /> 1. Pick a check-out method
+   617→            </CardTitle>
+   618→            <CardDescription className="text-xs">
+   619→              Quick code = the family&apos;s daily code · Guardian PIN = verify
+   620→              yourself · Override = staff-only, for flagged/unusual cases.
+   621→            </CardDescription>
+   622→          </CardHeader>
+   623→          <CardContent className="pt-0">
+   624→            <div className="grid sm:grid-cols-3 gap-2">
+   625→              <MethodCard
+   626→                active={method === "code"}
+   627→                onClick={() => setMethod("code")}
+   628→                icon={<KeyRound className="h-5 w-5" />}
+   629→                title="Quick code"
+   630→                description="Enter today's code"
+   631→              />
+   632→              <MethodCard
+   633→                active={method === "pin"}
+   634→                onClick={() => guardianPinSignin && setMethod("pin")}
+   635→                disabled={!guardianPinSignin}
+   636→                icon={<Lock className="h-5 w-5" />}
+   637→                title="Guardian PIN"
+   638→                description={
+   639→                  guardianPinSignin ? "Verify as carer/guardian" : "Disabled by admin"
+   640→                }
+   641→              />
+   642→              <MethodCard
+   643→                active={method === "override"}
+   644→                onClick={() => overrideCheckout && setMethod("override")}
+   645→                disabled={!overrideCheckout}
+   646→                icon={<ShieldAlert className="h-5 w-5" />}
+   647→                title="Override (staff)"
+   648→                description={
+   649→                  !overrideCheckout
+   650→                    ? "Disabled by admin"
+   651→                    : !isStaff
+   652→                      ? "Sign in as staff"
+   653→                      : "Authorise unusual case"
+   654→                }
+   655→              />
+   656→            </div>
+   657→          </CardContent>
+   658→        </Card>
+   659→
+   660→        {/* Children selection */}
+   661→        <Card>
+   662→          <CardHeader className="pb-3">
+   663→            <CardTitle className="text-base flex items-center gap-2">
+   664→              <Baby className="h-4 w-4 text-primary" /> 2. Select {t("child_plural").toLowerCase()} to sign out
+   665→            </CardTitle>
+   666→            <CardDescription className="text-xs">
+   667→              Allergies + medical notes are shown here for safety.
+   668→            </CardDescription>
+   669→          </CardHeader>
+   670→          <CardContent className="pt-0 space-y-3">
+   671→            {checkedInChildren.length === 0 && (
+   672→              <div className="rounded-md bg-muted/40 p-4 text-sm text-muted-foreground flex items-start gap-2">
+   673→                <CheckCircle2 className="h-4 w-4 mt-0.5 text-emerald-600 shrink-0" />
+   674→                <p>
+   675→                  No {t("child_plural").toLowerCase()} currently checked in.
+   676→                  {checkedOutChildren.length > 0 &&
+   677→                    ` (${checkedOutChildren.length} already signed out today — see below.)`}
+   678→                </p>
+   679→              </div>
+   680→            )}
+   681→            {checkedInChildren.map((c) => {
+   682→              const isSelected = selectedChildIds.has(c.id);
+   683→              const hasAllergies = !!c.allergies && c.allergies.trim().length > 0;
+   684→              const hasMedical = !!c.medicalNotes && c.medicalNotes.trim().length > 0;
+   685→              const hasAlert = hasAllergies || hasMedical;
+   686→              return (
+   687→                <div
+   688→                  key={c.id}
+   689→                  className={`rounded-xl border p-3 space-y-3 ${
+   690→                    hasAlert ? "border-destructive/40 bg-destructive/5" : "bg-card"
+   691→                  }`}
+   692→                >
+   693→                  <div className="flex items-start gap-3">
+   694→                    <Checkbox
+   695→                      id={`chk-${c.id}`}
+   696→                      checked={isSelected}
+   697→                      onCheckedChange={() => toggleChild(c.id)}
+   698→                      className="mt-1"
+   699→                    />
+   700→                    <div className="flex-1 min-w-0">
+   701→                      <div className="flex items-center gap-2 flex-wrap">
+   702→                        <label
+   703→                          htmlFor={`chk-${c.id}`}
+   704→                          className="font-medium cursor-pointer"
+   705→                        >
+   706→                          {c.firstName} {c.lastName}
+   707→                          {c.preferredName ? ` (${c.preferredName})` : ""}
+   708→                        </label>
+   709→                        {c.ageYears !== null && (
+   710→                          <Badge variant="secondary" className="text-[10px]">
+   711→                            {c.ageYears} yrs
+   712→                          </Badge>
+   713→                        )}
+   714→                        {c.schoolGrade && (
+   715→                          <Badge variant="outline" className="text-[10px]">
+   716→                            {c.schoolGrade}
+   717→                          </Badge>
+   718→                        )}
+   719→                      </div>
+   720→                      <p className="text-xs text-muted-foreground mt-0.5">
+   721→                        {c.className ? `${c.className}` : "No class"}
+   722→                        {c.roomName ? ` · ${c.roomName}` : ""}
+   723→                      </p>
+   724→                    </div>
+   725→                    {hasAlert && (
+   726→                      <Badge variant="destructive" className="gap-1 shrink-0">
+   727→                        <AlertTriangle className="h-3 w-3" /> Alert
+   728→                      </Badge>
+   729→                    )}
+   730→                  </div>
+   731→
+   732→                  {hasAlert && (
+   733→                    <div className="space-y-1.5">
+   734→                      {hasAllergies && (
+   735→                        <div className="rounded-md bg-destructive/10 border border-destructive/30 px-3 py-2 text-sm text-destructive flex items-start gap-2">
+   736→                          <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+   737→                          <p className="font-semibold">Allergy: {c.allergies}</p>
+   738→                        </div>
+   739→                      )}
+   740→                      {hasMedical && (
+   741→                        <div className="rounded-md bg-destructive/10 border border-destructive/30 px-3 py-2 text-sm text-destructive flex items-start gap-2">
+   742→                          <HeartPulse className="h-4 w-4 mt-0.5 shrink-0" />
+   743→                          <p className="font-semibold">Medical: {c.medicalNotes}</p>
+   744→                        </div>
+   745→                      )}
+   746→                    </div>
+   747→                  )}
+   748→                </div>
+   749→              );
+   750→            })}
+   751→
+   752→            {checkedOutChildren.length > 0 && (
+   753→              <div className="space-y-2 pt-2 border-t">
+   754→                <p className="text-xs font-medium text-muted-foreground pt-2">
+   755→                  Already signed out today:
+   756→                </p>
+   757→                {checkedOutChildren.map((c) => (
+   758→                  <div
+   759→                    key={c.id}
+   760→                    className="rounded-lg border bg-muted/30 p-3 flex items-center justify-between gap-2 opacity-80"
+   761→                  >
+   762→                    <div className="flex items-center gap-2 min-w-0">
+   763→                      <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+   764→                      <span className="font-medium truncate">
+   765→                        {c.firstName} {c.lastName}
+   766→                      </span>
+   767→                    </div>
+   768→                    <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
+   769→                      {c.checkoutMethod} ✓
+   770→                    </Badge>
+   771→                  </div>
+   772→                ))}
+   773→              </div>
+   774→            )}
+   775→          </CardContent>
+   776→        </Card>
+   777→
+   778→        {/* METHOD-SPECIFIC BLOCKS */}
+   779→        {method === "code" && (
+   780→          <Card>
+   781→            <CardHeader className="pb-3">
+   782→              <CardTitle className="text-base flex items-center gap-2">
+   783→                <KeyRound className="h-4 w-4 text-primary" /> 3. Enter today&apos;s daily code
+   784→              </CardTitle>
+   785→              <CardDescription className="text-xs">
+   786→                The {dailyCodeLength}-character code shown at check-in.{" "}
+   787→                {dailyCodeCharset === "numeric" ? "Numbers only." : "Letters + numbers."}
+   788→              </CardDescription>
+   789→            </CardHeader>
+   790→            <CardContent className="pt-0 space-y-3">
+   791→              <Input
+   792→                value={codeEntry}
+   793→                onChange={(e) => onCodeChange(e.target.value)}
+   794→                onKeyDown={(e) => {
+   795→                  if (e.key === "Enter" && selectedCount > 0) submit();
+   796→                }}
+   797→                inputMode={dailyCodeCharset === "numeric" ? "numeric" : "text"}
+   798→                autoComplete="off"
+   799→                placeholder={"•".repeat(dailyCodeLength)}
+   800→                className="h-16 text-3xl font-mono tracking-[0.4em] text-center uppercase"
+   801→                maxLength={dailyCodeLength}
+   802→                aria-label="Daily code"
+   803→              />
+   804→              <p className="text-[11px] text-muted-foreground">
+   805→                Lost the code? Switch to Guardian PIN or ask staff for an override.
+   806→              </p>
+   807→            </CardContent>
+   808→          </Card>
+   809→        )}
+   810→
+   811→        {method === "pin" && (
+   812→          <Card>
+   813→            <CardHeader className="pb-3">
+   814→              <CardTitle className="text-base flex items-center gap-2">
+   815→                <Lock className="h-4 w-4 text-primary" /> 3. Verify with your PIN
+   816→              </CardTitle>
+   817→              <CardDescription className="text-xs">
+   818→                Enter your 4–6 digit PIN. The check-out will be attributed to you.
+   819→              </CardDescription>
+   820→            </CardHeader>
+   821→            <CardContent className="pt-0 space-y-3">
+   822→              {verifiedGuardian ? (
+   823→                <div className="rounded-md border bg-emerald-50 dark:bg-emerald-950/40 p-3 text-sm flex items-center justify-between gap-2">
+   824→                  <span className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300 min-w-0">
+   825→                    <UserCheck className="h-4 w-4 shrink-0" />
+   826→                    <span className="truncate">
+   827→                      Verified: <strong>{verifiedGuardian.name}</strong>
+   828→                    </span>
+   829→                  </span>
+   830→                  <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={clearPin}>
+   831→                    Change
+   832→                  </Button>
+   833→                </div>
+   834→              ) : (
+   835→                <>
+   836→                  <div className="flex items-center justify-center gap-2 py-2">
+   837→                    <div
+   838→                      className="flex items-center justify-center gap-2 rounded-md border bg-muted/30 px-4 py-3 min-h-[3.5rem] min-w-[10rem] text-2xl font-mono tracking-[0.4em]"
+   839→                      aria-live="polite"
+   840→                      aria-label="PIN entry"
+   841→                    >
+   842→                      {pinEntry.length === 0 ? (
+   843→                        <span className="text-muted-foreground text-base tracking-normal">
+   844→                          Enter PIN
+   845→                        </span>
+   846→                      ) : (
+   847→                        "•".repeat(pinEntry.length)
+   848→                      )}
+   849→                    </div>
+   850→                  </div>
+   851→                  <div className="grid grid-cols-3 gap-2 max-w-xs mx-auto">
+   852→                    {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((d) => (
+   853→                      <Button
+   854→                        key={d}
+   855→                        type="button"
+   856→                        variant="outline"
+   857→                        className="h-14 text-xl"
+   858→                        onClick={() => pressPin(d)}
+   859→                        disabled={verifyingPin}
+   860→                        aria-label={`Digit ${d}`}
+   861→                      >
+   862→                        {d}
+   863→                      </Button>
+   864→                    ))}
+   865→                    <Button
+   866→                      type="button"
+   867→                      variant="ghost"
+   868→                      className="h-14"
+   869→                      onClick={() => setPinEntry("")}
+   870→                      disabled={verifyingPin || pinEntry.length === 0}
+   871→                      aria-label="Clear PIN"
+   872→                    >
+   873→                      Clear
+   874→                    </Button>
+   875→                    <Button
+   876→                      type="button"
+   877→                      variant="outline"
+   878→                      className="h-14 text-xl"
+   879→                      onClick={() => pressPin("0")}
+   880→                      disabled={verifyingPin}
+   881→                      aria-label="Digit 0"
+   882→                    >
+   883→                      0
+   884→                    </Button>
+   885→                    <Button
+   886→                      type="button"
+   887→                      variant="ghost"
+   888→                      className="h-14"
+   889→                      onClick={backspacePin}
+   890→                      disabled={verifyingPin || pinEntry.length === 0}
+   891→                      aria-label="Backspace"
+   892→                    >
+   893→                      <Delete className="h-5 w-5" />
+   894→                    </Button>
+   895→                  </div>
+   896→                  <Button
+   897→                    type="button"
+   898→                    className="w-full h-14 text-base"
+   899→                    onClick={() => void verifyPin()}
+   900→                    disabled={verifyingPin || pinEntry.length < 4}
+   901→                  >
+   902→                    {verifyingPin ? (
+   903→                      <>
+   904→                        <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Verifying…
+   905→                      </>
+   906→                    ) : (
+   907→                      "Verify PIN"
+   908→                    )}
+   909→                  </Button>
+   910→                </>
+   911→              )}
+   912→            </CardContent>
+   913→          </Card>
+   914→        )}
+   915→
+   916→        {method === "override" && (
+   917→          <Card>
+   918→            <CardHeader className="pb-3">
+   919→              <CardTitle className="text-base flex items-center gap-2">
+   920→                <ShieldAlert className="h-4 w-4 text-destructive" /> 3. Override authorisation
+   921→              </CardTitle>
+   922→              <CardDescription className="text-xs">
+   923→                {isStaff ? (
+   924→                  <>
+   925→                    Signed in as <strong>{staffName}</strong>. Use this only
+   926→                    after contacting an authorised carer/guardian by phone.
+   927→                  </>
+   928→                ) : (
+   929→                  <>Sign in as Admin / Teacher / Security to use override.</>
+   930→                )}
+   931→              </CardDescription>
+   932→            </CardHeader>
+   933→            <CardContent className="pt-0 space-y-4">
+   934→              {!isStaff ? (
+   935→                <Alert>
+   936→                  <Lock className="h-4 w-4" />
+   937→                  <AlertTitle>Staff sign-in required</AlertTitle>
+   938→                  <AlertDescription>
+   939→                    Override check-out is only available to Admin, Teacher, or
+   940→                    Security roles.{" "}
+   941→                    <Link href="/login" className="underline">
+   942→                      Sign in
+   943→                    </Link>{" "}
+   944→                    then return here.
+   945→                  </AlertDescription>
+   946→                </Alert>
+   947→              ) : (
+   948→                <>
+   949→                  {/* Collector identification — search Person OR free-text name */}
+   950→                  <div className="space-y-2">
+   951→                    <div className="flex items-center gap-2">
+   952→                      <Button
+   953→                        type="button"
+   954→                        size="sm"
+   955→                        variant={overrideCollectorMode === "person" ? "default" : "outline"}
+   956→                        onClick={() => {
+   957→                          setOverrideCollectorMode("person");
+   958→                          setCollectorName("");
+   959→                        }}
+   960→                      >
+   961→                        Search person
+   962→                      </Button>
+   963→                      <Button
+   964→                        type="button"
+   965→                        size="sm"
+   966→                        variant={overrideCollectorMode === "freetext" ? "default" : "outline"}
+   967→                        onClick={() => {
+   968→                          setOverrideCollectorMode("freetext");
+   969→                          setCollectorPersonId(null);
+   970→                        }}
+   971→                      >
+   972→                        Enter name (free-text)
+   973→                      </Button>
+   974→                    </div>
+   975→
+   976→                    {overrideCollectorMode === "person" ? (
+   977→                      <div className="space-y-2">
+   978→                        {collectorPersonId ? (
+   979→                          <div className="rounded-md border bg-emerald-50 dark:bg-emerald-950/40 p-3 text-sm flex items-center justify-between gap-2">
+   980→                            <span className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300 min-w-0">
+   981→                              <UserCheck className="h-4 w-4 shrink-0" />
+   982→                              <span className="truncate">
+   983→                                {(() => {
+   984→                                  const hit = collectorSearchHits.find(
+   985→                                    (h) => h.id === collectorPersonId,
+   986→                                  );
+   987→                                  // Also check the family adults list
+   988→                                  const adult = adults.find((a) => a.id === collectorPersonId);
+   989→                                  const name = hit
+   990→                                    ? `${hit.firstName} ${hit.lastName}`
+   991→                                    : adult
+   992→                                      ? `${adult.firstName} ${adult.lastName}`
+   993→                                      : collectorPersonId;
+   994→                                  return name;
+   995→                                })()}
+   996→                              </span>
+   997→                            </span>
+   998→                            <Button
+   999→                              variant="ghost"
+  1000→                              size="sm"
+  1001→                              className="h-8 text-xs"
+  1002→                              onClick={() => setCollectorPersonId(null)}
+  1003→                            >
+  1004→                              Change
+  1005→                            </Button>
+  1006→                          </div>
+  1007→                        ) : (
+  1008→                          <>
+  1009→                            <div className="relative">
+  1010→                              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+  1011→                              <Input
+  1012→                                value={collectorSearchQuery}
+  1013→                                onChange={(e) => setCollectorSearchQuery(e.target.value)}
+  1014→                                placeholder="Search by name / email / phone"
+  1015→                                className="h-12 pl-9"
+  1016→                                autoComplete="off"
+  1017→                              />
+  1018→                              {collectorSearchLoading && (
+  1019→                                <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin" />
+  1020→                              )}
+  1021→                            </div>
+  1022→                            {/* Family adults quick-pick */}
+  1023→                            {adults.length > 0 && (
+  1024→                              <div className="flex flex-wrap gap-1.5">
+  1025→                                <span className="text-[11px] text-muted-foreground self-center">
+  1026→                                  Family adults:
+  1027→                                </span>
+  1028→                                {adults.map((a) => (
+  1029→                                  <button
+  1030→                                    key={a.id}
+  1031→                                    type="button"
+  1032→                                    className="text-xs rounded-md border px-2 py-1 hover:bg-accent/40 transition-colors"
+  1033→                                    onClick={() => setCollectorPersonId(a.id)}
+  1034→                                  >
+  1035→                                    {a.firstName} {a.lastName}{" "}
+  1036→                                    <span className="text-[10px] text-muted-foreground uppercase">
+  1037→                                      {a.role === "PrimaryCarer" ? t("carer") : t("guardian")}
+  1038→                                    </span>
+  1039→                                  </button>
+  1040→                                ))}
+  1041→                              </div>
+  1042→                            )}
+  1043→                            {/* Search hits */}
+  1044→                            {collectorSearchHits.length > 0 && (
+  1045→                              <div className="rounded-md border max-h-48 overflow-y-auto divide-y">
+  1046→                                {collectorSearchHits.map((h) => (
+  1047→                                  <button
+  1048→                                    key={h.id}
+  1049→                                    type="button"
+  1050→                                    className="w-full text-left p-2.5 text-sm hover:bg-accent/40 flex items-center justify-between"
+  1051→                                    onClick={() => setCollectorPersonId(h.id)}
+  1052→                                  >
+  1053→                                    <span>
+  1054→                                      {h.firstName} {h.lastName}
+  1055→                                    </span>
+  1056→                                    <Badge variant="outline" className="text-[10px]">
+  1057→                                      {h.personType}
+  1058→                                    </Badge>
+  1059→                                  </button>
+  1060→                                ))}
+  1061→                              </div>
+  1062→                            )}
+  1063→                          </>
+  1064→                        )}
+  1065→                      </div>
+  1066→                    ) : (
+  1067→                      <div className="space-y-1.5">
+  1068→                        <Label htmlFor="collector-name" className="text-xs">
+  1069→                          Collector name (free-text — for unknown adults)
+  1070→                        </Label>
+  1071→                        <Input
+  1072→                          id="collector-name"
+  1073→                          value={collectorName}
+  1074→                          onChange={(e) => setCollectorName(e.target.value)}
+  1075→                          placeholder="e.g. Jane Doe (aunt)"
+  1076→                          className="h-12"
+  1077→                          autoComplete="off"
+  1078→                        />
+  1079→                      </div>
+  1080→                    )}
+  1081→                  </div>
+  1082→
+  1083→                  {/* Mandatory confirmation checkbox */}
+  1084→                  <label className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 p-3 cursor-pointer">
+  1085→                    <Checkbox
+  1086→                      checked={overrideConfirmed}
+  1087→                      onCheckedChange={(v) => setOverrideConfirmed(v === true)}
+  1088→                      className="mt-0.5"
+  1089→                    />
+  1090→                    <span className="text-sm">
+  1091→                      <strong className="text-amber-900 dark:text-amber-200">
+  1092→                        I have contacted and confirmed with an authorised
+  1093→                        carer/guardian that this person may collect the
+  1094→                        child(ren).
+  1095→                      </strong>
+  1096→                      <br />
+  1097→                      <span className="text-xs text-amber-800 dark:text-amber-300">
+  1098→                        Required. The carer name + phone number should be in the
+  1099→                        note below.
+  1100→                      </span>
+  1101→                    </span>
+  1102→                  </label>
+  1103→
+  1104→                  {/* Mandatory free-text note */}
+  1105→                  <div className="space-y-1.5">
+  1106→                    <Label htmlFor="override-note" className="text-xs">
+  1107→                      Reason / details <span className="text-destructive">*</span> (min 10 chars)
+  1108→                    </Label>
+  1109→                    <Textarea
+  1110→                      id="override-note"
+  1111→                      value={overrideNote}
+  1112→                      onChange={(e) => setOverrideNote(e.target.value)}
+  1113→                      placeholder="e.g. Spoke with John Smith (Primary Carer) on 0412 345 678 at 11:30 — confirmed Jane Doe (aunt) may collect Mary."
+  1114→                      className="min-h-24"
+  1115→                      maxLength={4000}
+  1116→                    />
+  1117→                    <p className="text-[11px] text-muted-foreground">
+  1118→                      {overrideNote.trim().length}/10 chars minimum
+  1119→                    </p>
+  1120→                  </div>
+  1121→                </>
+  1122→              )}
+  1123→            </CardContent>
+  1124→          </Card>
+  1125→        )}
+  1126→
+  1127→        {/* Photo verification (per photo_verification flag) */}
+  1128→        {showPhotoBlock && (
+  1129→          <Card>
+  1130→            <CardHeader className="pb-3">
+  1131→              <CardTitle className="text-base flex items-center gap-2">
+  1132→                <Camera className="h-4 w-4 text-primary" /> 4. Photo verification
+  1133→              </CardTitle>
+  1134→              <CardDescription className="text-xs">
+  1135→                Visually verify the collector matches the photo on file before
+  1136→                signing out.
+  1137→              </CardDescription>
+  1138→            </CardHeader>
+  1139→            <CardContent className="pt-0 space-y-3">
+  1140→              <div className="grid grid-cols-2 gap-3">
+  1141→                {photoChildren.slice(0, 2).map((c) => (
+  1142→                  <PhotoTile
+  1143→                    key={c.id}
+  1144→                    personId={c.id}
+  1145→                    label={`${c.firstName} ${c.lastName}`}
+  1146→                    subLabel={c.ageYears !== null ? `${c.ageYears} yrs` : "Child"}
+  1147→                    hasPhoto={c.hasPhoto}
+  1148→                  />
+  1149→                ))}
+  1150→                {photoChildren.length > 2 && (
+  1151→                  <div className="col-span-2 text-xs text-muted-foreground">
+  1152→                    + {photoChildren.length - 2} more selected.
+  1153→                  </div>
+  1154→                )}
+  1155→                {method === "pin" && verifiedGuardian && (
+  1156→                  <PhotoTile
+  1157→                    personId={verifiedGuardian.personId}
+  1158→                    label={verifiedGuardian.name}
+  1159→                    subLabel="Collector (verified PIN)"
+  1160→                    hasPhoto={
+  1161→                      adults.find((a) => a.id === verifiedGuardian.personId)?.hasPhoto ?? false
+  1162→                    }
+  1163→                  />
+  1164→                )}
+  1165→                {method === "override" &&
+  1166→                  overrideCollectorMode === "person" &&
+  1167→                  collectorPersonId && (
+  1168→                    <PhotoTile
+  1169→                      personId={collectorPersonId}
+  1170→                      label={
+  1171→                        collectorSearchHits.find((h) => h.id === collectorPersonId)
+  1172→                          ? `${collectorSearchHits.find((h) => h.id === collectorPersonId)!.firstName} ${
+  1173→                              collectorSearchHits.find((h) => h.id === collectorPersonId)!.lastName
+  1174→                            }`
+  1175→                          : "Collector"
+  1176→                      }
+  1177→                      subLabel="Collector (override)"
+  1178→                      hasPhoto={adults.find((a) => a.id === collectorPersonId)?.hasPhoto ?? false}
+  1179→                    />
+  1180→                  )}
+  1181→              </div>
+  1182→              <label className="flex items-start gap-3 rounded-lg border p-3 cursor-pointer">
+  1183→                <Checkbox
+  1184→                  checked={photoVerified}
+  1185→                  onCheckedChange={(v) => setPhotoVerified(v === true)}
+  1186→                  className="mt-0.5"
+  1187→                />
+  1188→                <span className="text-sm">
+  1189→                  I have visually verified the collector matches the photo on
+  1190→                  file.
+  1191→                </span>
+  1192→              </label>
+  1193→            </CardContent>
+  1194→          </Card>
+  1195→        )}
+  1196→      </div>
+  1197→
+  1198→      {/* Sticky submit footer */}
+  1199→      <div className="sticky bottom-0 border-t bg-background/95 backdrop-blur">
+  1200→        <div className="mx-auto w-full max-w-3xl px-4 sm:px-6 py-3 flex items-center gap-3">
+  1201→          <Button asChild variant="ghost" size="sm" className="h-12">
+  1202→            <Link href={`/kiosk/family/${familyId}`}>
+  1203→              <ArrowLeft className="mr-1.5 h-4 w-4" /> Cancel
+  1204→            </Link>
+  1205→          </Button>
+  1206→          <Button
+  1207→            className="flex-1 h-16 text-base"
+  1208→            size="lg"
+  1209→            disabled={submitting || selectedCount === 0 || !canSubmit()}
+  1210→            onClick={submit}
+  1211→          >
+  1212→            {submitting ? (
+  1213→              <>
+  1214→                <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Signing out…
+  1215→              </>
+  1216→            ) : (
+  1217→              <>
+  1218→                <CheckCircle2 className="mr-2 h-5 w-5" />
+  1219→                Sign out {selectedCount}{" "}
+  1220→                {selectedCount === 1 ? t("child") : t("child_plural")}
+  1221→              </>
+  1222→            )}
+  1223→          </Button>
+  1224→        </div>
+  1225→      </div>
+  1226→    </div>
+  1227→  );
+  1228→
+  1229→  function canSubmit(): boolean {
+  1230→    if (method === "code") return codeEntry.trim().length > 0;
+  1231→    if (method === "pin") return !!verifiedGuardian;
+  1232→    if (method === "override") {
+  1233→      if (!isStaff) return false;
+  1234→      if (!overrideConfirmed) return false;
+  1235→      if (overrideNote.trim().length < 10) return false;
+  1236→      if (overrideCollectorMode === "person" && !collectorPersonId) return false;
+  1237→      if (overrideCollectorMode === "freetext" && collectorName.trim().length < 2)
+  1238→        return false;
+  1239→    }
+  1240→    if (photoVerification && !photoVerified) return false;
+  1241→    return true;
+  1242→  }
+  1243→}
+  1244→
+  1245→// ---------------------------------------------------------------------------
+  1246→// MethodCard subcomponent
+  1247→// ---------------------------------------------------------------------------
+  1248→
+  1249→function MethodCard({
+  1250→  active,
+  1251→  onClick,
+  1252→  disabled,
+  1253→  icon,
+  1254→  title,
+  1255→  description,
+  1256→}: {
+  1257→  active: boolean;
+  1258→  onClick: () => void;
+  1259→  disabled?: boolean;
+  1260→  icon: React.ReactNode;
+  1261→  title: string;
+  1262→  description: string;
+  1263→}) {
+  1264→  return (
+  1265→    <button
+  1266→      type="button"
+  1267→      onClick={onClick}
+  1268→      disabled={disabled}
+  1269→      className={`min-h-14 rounded-lg border p-3 text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+  1270→        active
+  1271→          ? "border-primary bg-primary/10 ring-1 ring-primary"
+  1272→          : "border-border bg-card hover:bg-accent/40"
+  1273→      }`}
+  1274→    >
+  1275→      <div className="flex items-center gap-2">
+  1276→        <span className={active ? "text-primary" : "text-muted-foreground"}>{icon}</span>
+  1277→        <span className="font-medium text-sm">{title}</span>
+  1278→      </div>
+  1279→      <p className="text-[11px] text-muted-foreground mt-1">{description}</p>
+  1280→    </button>
+  1281→  );
+  1282→}
+  1283→
+  1284→// ---------------------------------------------------------------------------
+  1285→// PhotoTile — shows a person's photo (or initials fallback) via
+  1286→// /api/people/[id]/photo. Gracefully degrades to an initials avatar if the
+  1287→// request fails (e.g. open-kiosk mode where there's no auth session).
+  1288→// ---------------------------------------------------------------------------
+  1289→
+  1290→function PhotoTile({
+  1291→  personId,
+  1292→  label,
+  1293→  subLabel,
+  1294→  hasPhoto,
+  1295→}: {
+  1296→  personId: string;
+  1297→  label: string;
+  1298→  subLabel: string;
+  1299→  hasPhoto: boolean;
+  1300→}) {
+  1301→  const [errored, setErrored] = useState(false);
+  1302→  const initials = label
+  1303→    .split(" ")
+  1304→    .map((p) => p[0] ?? "")
+  1305→    .slice(0, 2)
+  1306→    .join("")
+  1307→    .toUpperCase();
+  1308→  return (
+  1309→    <div className="rounded-lg border bg-card p-3 flex items-center gap-3">
+  1310→      <div className="h-16 w-16 rounded-md overflow-hidden bg-muted flex items-center justify-center shrink-0">
+  1311→        {!errored && hasPhoto ? (
+  1312→          <img
+  1313→            src={`/api/people/${personId}/photo`}
+  1314→            alt={label}
+  1315→            className="h-full w-full object-cover"
+  1316→            onError={() => setErrored(true)}
+  1317→          />
+  1318→        ) : (
+  1319→          <span className="text-2xl font-semibold text-muted-foreground">{initials || "?"}</span>
+  1320→        )}
+  1321→      </div>
+  1322→      <div className="min-w-0">
+  1323→        <p className="font-medium text-sm truncate">{label}</p>
+  1324→        <p className="text-xs text-muted-foreground">{subLabel}</p>
+  1325→        {!hasPhoto && (
+  1326→          <p className="text-[10px] text-muted-foreground mt-0.5">No photo on file</p>
+  1327→        )}
+  1328→      </div>
+  1329→    </div>
+  1330→  );
+  1331→}
+  1332→

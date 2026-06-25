@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="ChildCheck">
+  <rect width="512" height="512" rx="108" fill="#0f9d8a"/>
+  <g fill="none" stroke="#ffffff" stroke-width="24" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M256 90 L400 138 V261 C400 352 336 400 256 421 C176 400 112 352 112 261 V138 Z" fill="#0b7d6e"/>
+    <circle cx="256" cy="229" r="35" fill="#ffffff" stroke="none"/>
+    <path d="M256 264 L256 331 M256 331 L224 368 M256 331 L293 293" stroke-width="27"/>
+  </g>
+</svg>
