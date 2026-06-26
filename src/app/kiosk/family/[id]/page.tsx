@@ -66,6 +66,7 @@ export default async function KioskFamilyDetailPage({
             select: {
               id: true,
               firstName: true,
+              middleName: true,
               lastName: true,
               preferredName: true,
               personType: true,
@@ -115,6 +116,7 @@ export default async function KioskFamilyDetailPage({
       .map((m) => ({
         id: m.person.id,
         firstName: m.person.firstName,
+        middleName: m.person.middleName,
         lastName: m.person.lastName,
       })),
     children: family.members
@@ -128,6 +130,7 @@ export default async function KioskFamilyDetailPage({
         return {
           id: m.person.id,
           firstName: m.person.firstName,
+          middleName: m.person.middleName,
           lastName: m.person.lastName,
           ageYears,
           schoolGrade: m.person.schoolGrade,
@@ -146,6 +149,7 @@ export default async function KioskFamilyDetailPage({
       .map((m) => ({
         id: m.person.id,
         firstName: m.person.firstName,
+        middleName: m.person.middleName,
         lastName: m.person.lastName,
       })),
     sessions: activePrograms.map((p) => ({

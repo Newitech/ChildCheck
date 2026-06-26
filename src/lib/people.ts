@@ -13,6 +13,7 @@ import { db } from "@/lib/db";
 export interface PersonListDTO {
   id: string;
   firstName: string;
+  middleName: string | null;
   lastName: string;
   preferredName: string | null;
   personType: string;
@@ -47,6 +48,7 @@ export interface WwccCardDTO {
 export interface PersonDetailDTO {
   id: string;
   firstName: string;
+  middleName: string | null;
   lastName: string;
   preferredName: string | null;
   personType: string;
@@ -113,6 +115,7 @@ export async function toPersonListDTO(
   person: {
     id: string;
     firstName: string;
+    middleName?: string | null;
     lastName: string;
     preferredName: string | null;
     personType: string;
@@ -131,6 +134,7 @@ export async function toPersonListDTO(
   return {
     id: person.id,
     firstName: person.firstName,
+    middleName: person.middleName ?? null,
     lastName: person.lastName,
     preferredName: person.preferredName,
     personType: person.personType,
@@ -155,6 +159,7 @@ export async function toPersonDetailDTO(
   person: {
     id: string;
     firstName: string;
+    middleName?: string | null;
     lastName: string;
     preferredName: string | null;
     personType: string;
@@ -196,6 +201,7 @@ export async function toPersonDetailDTO(
   return {
     id: person.id,
     firstName: person.firstName,
+    middleName: person.middleName ?? null,
     lastName: person.lastName,
     preferredName: person.preferredName,
     personType: person.personType,
@@ -235,6 +241,25 @@ export async function toPersonDetailDTO(
         }))
       : [],
   };
+}
+
+/**
+ * Format a person's full name with optional middle name(s).
+ *
+ * When `middleName` is null/empty the result is just "First Last" (no extra
+ * space). When present it's joined between first and last, e.g.
+ * "Jane Marie Smith". Free-text middle values are used verbatim — the form
+ * accepts either a full middle name or just an initial (e.g. "M").
+ */
+export function formatFullName(p: {
+  firstName: string;
+  middleName?: string | null;
+  lastName: string;
+}): string {
+  const first = (p.firstName ?? "").trim();
+  const middle = (p.middleName ?? "").trim();
+  const last = (p.lastName ?? "").trim();
+  return [first, middle, last].filter((s) => s.length > 0).join(" ");
 }
 
 /** Convenience: load a person by id with all relations needed for detail. */

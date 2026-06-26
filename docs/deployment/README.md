@@ -38,6 +38,7 @@ After installing with **any** method, complete the first-run setup wizard:
 - **[Configuration (all env vars, data dirs)](./configuration.md)**
 - **[Updating to a new version](./updating.md)**
 - **[Backup & restore](./backup-restore.md)**
+- **[Uninstalling (per-platform, with backup)](./uninstall.md)**
 
 ## Architecture (one-page overview)
 
@@ -70,7 +71,7 @@ After installing with **any** method, complete the first-run setup wizard:
 
 ## Getting help
 
-- File issues at <https://github.com/Newitech/ChildCheck/issues>.
+- File issues at <https://github.com/childcheck/childcheck/issues>.
 - Before contacting support, gather:
   - The output of `childcheck version` (or `docker logs childcheck` first lines).
   - Your install method + OS.

@@ -1,15 +1,10 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Palette, ToggleLeft, CalendarDays } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 
 import { requireRole } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { BrandingForm } from "./branding-form";
-import { FlagsForm } from "./flags-form";
-import { OrgTypeSelector } from "./org-type-selector";
-import { CalendarForm } from "./calendar-form";
-import { CodeSettingsForm } from "./code-settings-form";
+import { SettingsTabs } from "./settings-tabs";
 
 export const dynamic = "force-dynamic";
 
@@ -43,31 +38,7 @@ export default async function SettingsPage() {
         </div>
       </div>
 
-      <Tabs defaultValue="branding" className="w-full">
-        <TabsList className="grid w-full sm:w-auto grid-cols-3">
-          <TabsTrigger value="branding" className="gap-1.5">
-            <Palette className="h-4 w-4" /> Branding &amp; Terminology
-          </TabsTrigger>
-          <TabsTrigger value="calendar" className="gap-1.5">
-            <CalendarDays className="h-4 w-4" /> Calendar &amp; Codes
-          </TabsTrigger>
-          <TabsTrigger value="flags" className="gap-1.5">
-            <ToggleLeft className="h-4 w-4" /> Feature Toggles
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="branding" className="mt-4 space-y-6">
-          <OrgTypeSelector />
-          <BrandingForm />
-        </TabsContent>
-        <TabsContent value="calendar" className="mt-4 space-y-6">
-          <CalendarForm />
-          <CodeSettingsForm />
-        </TabsContent>
-        <TabsContent value="flags" className="mt-4">
-          <FlagsForm />
-        </TabsContent>
-      </Tabs>
+      <SettingsTabs />
     </div>
   );
 }

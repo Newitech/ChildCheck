@@ -59,8 +59,9 @@ RUN cd mini-services/realtime && bun install --frozen-lockfile
 FROM oven/bun:1.3-debian AS runtime
 
 # Install only what the runtime image needs: tini (PID 1 / signal handling),
-# wget (healthcheck probe), openssl (used by entrypoint to mint a default
-# NEXTAUTH_SECRET if none is provided).
+# wget (healthcheck probe), openssl (entrypoint mints a default NEXTAUTH_SECRET),
+# gosu (privilege drop — the entrypoint runs as root to fix bind-mount perms,
+# then drops to the childcheck user before starting the app).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends tini wget openssl ca-certificates gosu \
  && rm -rf /var/lib/apt/lists/*
@@ -81,15 +82,18 @@ COPY --from=builder --chown=childcheck:childcheck /app/.next/standalone ./
 COPY --from=builder --chown=childcheck:childcheck /app/.next/static ./.next/static
 COPY --from=builder --chown=childcheck:childcheck /app/public ./public
 
-# --- Copy the Prisma schema + a minimal prisma CLI install so the entrypoint
-#     can run `bun run db:push` to create/migrate the SQLite DB on first boot.
+# --- Copy the Prisma schema + package manifests so the entrypoint can run
+#     `prisma db push --skip-generate` to apply the schema to SQLite on boot.
 COPY --from=builder --chown=childcheck:childcheck /app/prisma ./prisma
 COPY --from=builder --chown=childcheck:childcheck /app/package.json ./package.json
 COPY --from=builder --chown=childcheck:childcheck /app/bun.lock ./bun.lock
-# Install only prisma as a runtime dep (devDeps excluded). --frozen-lockfile
-# would fail because we're not installing everything, so we use --production.
-RUN bun install --production \
- && bun add prisma@^6.11.1 --production
+# Copy the ENTIRE node_modules from the builder stage. This includes:
+#   - prisma CLI (needed for db:push at boot)
+#   - @prisma/client + the generated client (.prisma) — needed by the app
+#   - all runtime deps the standalone server traces
+# We do NOT run a second `bun install --production` here — that was slow +
+# hit integrity-check failures. Copying from the builder is faster + reliable.
+COPY --from=builder --chown=childcheck:childcheck /app/node_modules ./node_modules
 
 # --- Copy the realtime mini-service (Node + socket.io).
 COPY --from=builder --chown=childcheck:childcheck /app/mini-services/realtime ./mini-services/realtime
@@ -116,10 +120,14 @@ EXPOSE 3000 3003
 
 # Health check: the /api/config route is public + DB-backed, so a 200 means
 # the Next.js server is up AND the Prisma client can read the (just-pushed)
-# SQLite schema.
+# SQLite schema. Uses $PORT so it works regardless of the port override.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD wget -qO- --tries=1 --timeout=3 http://localhost:3000/api/config >/dev/null 2>&1 || exit 1
+  CMD wget -qO- --tries=1 --timeout=3 http://localhost:${PORT:-3000}/api/config >/dev/null 2>&1 || exit 1
 
-# USER childcheck
+# NOTE: we intentionally do NOT set USER childcheck here. The entrypoint runs
+# as root so it can chown the bind-mounted data/db/config directories (which
+# may be owned by the host user, e.g. UID 1000) to the childcheck user. It
+# then drops privileges via gosu before starting the app. This is the standard
+# pattern used by the official Postgres / MySQL images.
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]

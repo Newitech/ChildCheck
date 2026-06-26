@@ -30,6 +30,7 @@ export interface PersonColumn {
 export const PERSON_COLUMNS: PersonColumn[] = [
   { key: "id", header: "id", required: false, description: "Existing Person id (cuid). Leave blank on new imports." },
   { key: "firstname", header: "firstName", required: true, description: "Person's given name." },
+  { key: "middlename", header: "middleName", required: false, description: "Optional middle name or initial (free text)." },
   { key: "lastname", header: "lastName", required: true, description: "Person's family/surname." },
   { key: "preferredname", header: "preferredName", required: false, description: "Optional preferred/chosen name." },
   { key: "persontype", header: "personType", required: true, description: "\"Adult\" or \"Child\"." },
@@ -76,7 +77,7 @@ export const FAMILY_COLUMNS: PersonColumn[] = [
   { key: "notes", header: "notes", required: false, description: "Free-text notes." },
   { key: "isactive", header: "isActive", required: false, description: "\"true\" or \"false\". Defaults true." },
   { key: "primarycareremail", header: "primaryCarerEmail", required: false, description: "Email of an existing Person to attach as PrimaryCarer." },
-  { key: "members", header: "members", required: false, description: "Semicolon-separated 'Name|role|DOB' entries. See Stage 12 docs." },
+  { key: "members", header: "members", required: false, description: "Semicolon-separated 'Name|role|DOB' entries. See the import docs." },
 ];
 
 export const FAMILY_REQUIRED_HEADERS = FAMILY_COLUMNS.filter((c) => c.required).map((c) => c.header);
@@ -97,6 +98,7 @@ export interface PersonRowValidationError {
 export interface PersonImportRow {
   row: number;
   firstName: string;
+  middleName: string | null;
   lastName: string;
   preferredName: string | null;
   personType: PersonType;
@@ -151,6 +153,7 @@ export function parsePersonRow(
   const errors: PersonRowValidationError[] = [];
 
   const firstName = pick(row, ["firstname", "first_name", "givenname"]).trim();
+  const middleName = nullIfEmpty(pick(row, ["middlename", "middle_name", "middleinitial", "middle_initial"]));
   const lastName = pick(row, ["lastname", "last_name", "surname", "familyname"]).trim();
 
   if (!firstName) {
@@ -224,6 +227,7 @@ export function parsePersonRow(
     row: {
       row: rowNumber,
       firstName,
+      middleName,
       lastName,
       preferredName,
       personType,
@@ -596,6 +600,7 @@ export async function insertPeopleBatch(
           // imports are append-only; an id collision would roll the batch.
           ...(r.id ? { id: r.id } : {}),
           firstName: r.firstName,
+          middleName: r.middleName,
           lastName: r.lastName,
           preferredName: r.preferredName,
           personType: r.personType,

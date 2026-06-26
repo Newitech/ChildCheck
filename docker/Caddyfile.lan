@@ -1,0 +1,36 @@
+# =============================================================================
+# ChildCheck — docker-compose Caddyfile (LAN-ONLY mode)
+# =============================================================================
+#
+# Use this Caddyfile when you want HTTPS on a LAN without a real DNS name
+# (e.g. running on a church volunteer's laptop at 192.168.1.50, or an internal
+# NAS that you reach by IP). Caddy uses its built-in internal CA to mint
+# certificates on the fly — no Let's Encrypt, no port-80 inbound requirement,
+# no DNS record needed.
+#
+# Usage:
+#   cp docker/Caddyfile.lan docker/Caddyfile
+#   docker compose --profile tls up -d
+#
+# The catch: browsers won't trust Caddy's internal CA until you import the
+# root certificate into each client's trust store. Caddy creates the root CA
+# on first run; inside the container it's at:
+#
+#   /data/caddy/pki/authorities/local/root.crt
+#
+# Copy it out + trust it on each client (see install/Caddyfile.lan for the
+# per-OS commands, or use mkcert for a smoother experience).
+#
+# =============================================================================
+:443 {
+	tls internal
+	reverse_proxy childcheck:{$PORT:3000}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+	}
+}

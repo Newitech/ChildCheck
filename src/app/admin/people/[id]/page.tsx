@@ -28,6 +28,16 @@ export default async function PersonDetailPage({
   const person = await db.person.findUnique({
     where: { id },
     include: {
+      user: {
+        select: {
+          id: true,
+          username: true,
+          status: true,
+          lastLoginAt: true,
+          pinHash: true,
+          roles: { select: { role: true } },
+        },
+      },
       familyMemberships: {
         include: { family: { select: { id: true, familyName: true, isActive: true } } },
       },
@@ -38,6 +48,19 @@ export default async function PersonDetailPage({
     // We still allow viewing archived people if they have family ties (defensive)
     if (!person) notFound();
   }
+
+  const userSummary = person!.user
+    ? {
+        id: person!.user.id,
+        username: person!.user.username,
+        status: person!.user.status,
+        lastLoginAt: person!.user.lastLoginAt
+          ? person!.user.lastLoginAt.toISOString()
+          : null,
+        hasPin: !!person!.user.pinHash,
+        roles: person!.user.roles.map((r) => r.role),
+      }
+    : null;
 
   return (
     <div className="space-y-6">
@@ -65,6 +88,7 @@ export default async function PersonDetailPage({
       <PersonDetail
         personId={person!.id}
         wwccEnabled={wwccEnabled}
+        userSummary={userSummary}
         initial={{
           id: person!.id,
           firstName: person!.firstName,
@@ -89,7 +113,7 @@ export default async function PersonDetailPage({
           isActive: person!.isActive,
           createdAt: person!.createdAt.toISOString(),
           updatedAt: person!.updatedAt.toISOString(),
-          hasUser: false,
+          hasUser: !!person!.user,
           familyMemberships: person!.familyMemberships.map((m) => ({
             familyId: m.family.id,
             familyName: m.family.familyName,

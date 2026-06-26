@@ -1,0 +1,228 @@
+#!/usr/bin/env bash
+# =============================================================================
+# ChildCheck — macOS uninstaller (launchd user agent)
+#
+# What it does:
+#   1. Unloads + removes the launchd agent (~/Library/LaunchAgents/org.childcheck.plist).
+#   2. Asks for explicit confirmation (default: NO — requires "yes" / "I-understand").
+#   3. Offers to back up the data dir to ~/childcheck-data-backup-<date>.tar.gz
+#      (default: yes — the backup happens BEFORE any removal).
+#   4. Removes the install dir (/Applications/ChildCheck).
+#   5. Removes the data dir (~/Library/Application Support/ChildCheck) ONLY if
+#      the user explicitly confirms a SECOND time (default: keep data — just
+#      remove binary + plist).
+#   6. Prints post-uninstall instructions (where the backup is, how to re-install).
+#
+# Usage:
+#   bash install/uninstall-macos.sh
+#
+# Run as the user who owns the install (NOT root — launchd user agents belong
+# to a specific user, so root can't manage them cleanly).
+#
+# Data is NEVER silently destroyed — the script defaults to KEEPING data, and
+# when removing data it makes a tarball backup first unless you explicitly
+# decline with --no-backup.
+#
+# Flags:
+#   --no-backup       Skip the data backup step (only meaningful with --remove-data).
+#   --remove-data     Remove the data dir too (still asks for confirmation).
+#   --yes             Skip the initial confirmation prompt (still asks for data
+#                     removal confirmation unless --remove-data is also given).
+# =============================================================================
+set -euo pipefail
+
+# Refuse to run as root — launchd user agents belong to a specific user.
+if [ "$(id -u)" -eq 0 ]; then
+  echo "ERROR: do NOT run this script as root. Run it as the user who owns the install."
+  exit 1
+fi
+
+INSTALL_DIR="/Applications/ChildCheck"
+DATA_DIR="${HOME}/Library/Application Support/ChildCheck"
+PLIST_PATH="${HOME}/Library/LaunchAgents/org.childcheck.plist"
+LABEL="org.childcheck"
+BINARY_NAME="childcheck"
+
+# Args.
+SKIP_BACKUP=0
+REMOVE_DATA=0
+ASSUME_YES=0
+for arg in "$@"; do
+  case "${arg}" in
+    --no-backup)    SKIP_BACKUP=1 ;;
+    --remove-data)  REMOVE_DATA=1 ;;
+    --yes|-y)       ASSUME_YES=1 ;;
+    *)
+      echo "ERROR: unknown flag: ${arg}"
+      echo "Usage: $0 [--no-backup] [--remove-data] [--yes]"
+      exit 1
+      ;;
+  esac
+done
+
+# Colors.
+RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; CYAN=$'\033[36m'; NC=$'\033[0m'
+info()  { echo "${GREEN}[info]${NC}  $*"; }
+warn()  { echo "${YELLOW}[warn]${NC}  $*"; }
+err()   { echo "${RED}[error]${NC} $*" >&2; }
+step()  { echo ""; echo "${CYAN}==>${NC} $*"; }
+
+# ----------------------------------------------------------------------------
+# 0. Confirmation
+# ----------------------------------------------------------------------------
+echo ""
+echo "============================================================"
+echo " ChildCheck uninstaller (macOS / launchd)"
+echo "============================================================"
+echo ""
+echo " This will:"
+echo "   - Unload + remove the launchd agent:  ${PLIST_PATH}"
+echo "   - Remove the install dir:             ${INSTALL_DIR}"
+echo "   - (Optionally) back up data:          ~/childcheck-data-backup-<date>.tar.gz"
+echo "   - (Optionally) remove data:           ${DATA_DIR}"
+echo ""
+echo " Data is KEPT by default. Removing it requires explicit confirmation."
+echo "============================================================"
+echo ""
+
+if [ "${ASSUME_YES}" -ne 1 ]; then
+  read -r -p "Type 'yes' or 'I-understand' to proceed (anything else aborts): " CONFIRM </dev/tty
+  case "${CONFIRM}" in
+    yes|I-understand) ;;
+    *)
+      echo "Aborted — no changes were made."
+      exit 0
+      ;;
+  esac
+fi
+
+# ----------------------------------------------------------------------------
+# 1. Unload + remove the launchd agent
+# ----------------------------------------------------------------------------
+step "Unloading launchd agent"
+if [ -f "${PLIST_PATH}" ]; then
+  # unload is idempotent — ignore errors if it's already unloaded.
+  launchctl unload "${PLIST_PATH}" 2>/dev/null || true
+  rm -f "${PLIST_PATH}"
+  info "agent unloaded + plist removed."
+else
+  info "no plist at ${PLIST_PATH} — skipping."
+fi
+
+# Also try bootout (modern macOS) in case load/unload didn't catch it.
+launchctl bootout "gui/$(id -u)/${LABEL}" 2>/dev/null || true
+
+# Kill any stray process just in case (e.g. if launched directly).
+pkill -f "${INSTALL_DIR}/${BINARY_NAME}" 2>/dev/null || true
+
+# ----------------------------------------------------------------------------
+# 2. Backup
+# ----------------------------------------------------------------------------
+BACKUP_PATH=""
+if [ -d "${DATA_DIR}" ] && [ "${SKIP_BACKUP}" -ne 1 ]; then
+  step "Backing up data dir"
+  read -r -p "Back up ${DATA_DIR} before removal? [Y/n] " DO_BACKUP </dev/tty
+  DO_BACKUP="${DO_BACKUP:-Y}"
+  case "${DO_BACKUP}" in
+    [Nn]*)
+      warn "skipping backup. If you proceed with --remove-data, the data will be lost."
+      ;;
+    *)
+      STAMP="$(date +%Y%m%d-%H%M%S)"
+      BACKUP_PATH="${HOME}/childcheck-data-backup-${STAMP}.tar.gz"
+      info "creating tarball: ${BACKUP_PATH}"
+      # tar from the parent dir so the archive contains a top-level "ChildCheck/" folder.
+      if ! tar -czf "${BACKUP_PATH}" -C "$(dirname "${DATA_DIR}")" "$(basename "${DATA_DIR}")" 2>/dev/null; then
+        err "backup failed — aborting so data is NOT lost."
+        exit 1
+      fi
+      info "backup complete: ${BACKUP_PATH}"
+      ls -lh "${BACKUP_PATH}"
+      ;;
+  esac
+elif [ "${SKIP_BACKUP}" -eq 1 ]; then
+  warn "--no-backup given — skipping backup."
+fi
+
+# ----------------------------------------------------------------------------
+# 3. Remove install dir
+# ----------------------------------------------------------------------------
+step "Removing install dir"
+if [ -d "${INSTALL_DIR}" ]; then
+  rm -rf "${INSTALL_DIR}"
+  info "removed ${INSTALL_DIR}."
+else
+  info "${INSTALL_DIR} not found — skipping."
+fi
+
+# ----------------------------------------------------------------------------
+# 4. Remove data dir (only with explicit confirmation)
+# ----------------------------------------------------------------------------
+if [ "${REMOVE_DATA}" -eq 1 ] && [ -d "${DATA_DIR}" ]; then
+  step "Removing data dir ${DATA_DIR}"
+  echo ""
+  echo "  *** You passed --remove-data. ***"
+  echo "  This will PERMANENTLY DELETE:"
+  echo "    - The SQLite database (children, families, programs, attendance...)"
+  echo "    - All encrypted-at-rest photos"
+  echo "    - All branding assets"
+  echo "    - All encrypted backup bundles (.cbak files)"
+  echo ""
+  if [ -n "${BACKUP_PATH}" ]; then
+    echo "  A backup was created at: ${BACKUP_PATH}"
+    echo "  RESTORE PREREQUISITE: keep the CHILDCHECK_DATA_KEY from"
+    echo "  ${DATA_DIR}/config/.env — without it, the backup cannot be decrypted."
+    echo ""
+  else
+    echo "  NO BACKUP was created. This deletion is irreversible."
+    echo ""
+  fi
+  read -r -p "Type 'DELETE-FOREVER' to permanently remove ${DATA_DIR}: " DEL_CONFIRM </dev/tty
+  if [ "${DEL_CONFIRM}" = "DELETE-FOREVER" ]; then
+    rm -rf "${DATA_DIR}"
+    info "removed ${DATA_DIR}."
+  else
+    warn "kept data dir ${DATA_DIR} (confirmation didn't match 'DELETE-FOREVER')."
+  fi
+elif [ -d "${DATA_DIR}" ]; then
+  step "Keeping data dir"
+  info "data dir left intact at ${DATA_DIR}."
+  info "to remove it later:  rm -rf \"${DATA_DIR}\""
+fi
+
+# ----------------------------------------------------------------------------
+# 5. Post-uninstall summary
+# ----------------------------------------------------------------------------
+echo ""
+echo "============================================================"
+echo " ChildCheck uninstalled."
+echo "============================================================"
+echo ""
+echo " Removed:"
+echo "   - install dir:    ${INSTALL_DIR}"
+echo "   - launchd plist:  ${PLIST_PATH}"
+[ "${REMOVE_DATA}" -eq 1 ] && echo "   - data dir:       ${DATA_DIR}"
+echo ""
+if [ -n "${BACKUP_PATH}" ]; then
+  echo " Data backup:"
+  echo "   ${BACKUP_PATH}"
+  echo ""
+  echo " To restore on a fresh install:"
+  echo "   1. Re-run install/install-macos.sh"
+  echo "   2. Unload the agent:  launchctl unload \"${PLIST_PATH}\""
+  echo "   3. Extract the backup over the new data dir:"
+  echo "        tar -xzf \"${BACKUP_PATH}\" -C \"$(dirname "${DATA_DIR}")\""
+  echo "   4. Copy the CHILDCHECK_DATA_KEY from the old .env (inside the backup's"
+  echo "      config/.env) into the new \"${DATA_DIR}/config/.env\" — without it,"
+  echo "      encrypted photos + backups cannot be decrypted."
+  echo "   5. Reload:  launchctl load \"${PLIST_PATH}\""
+elif [ "${REMOVE_DATA}" -eq 1 ]; then
+  echo " No backup was created. Data has been permanently deleted."
+else
+  echo " Data dir left intact at:  \"${DATA_DIR}\""
+  echo " To remove it manually:    rm -rf \"${DATA_DIR}\""
+fi
+echo ""
+echo " To reinstall later:"
+echo "   bash install/install-macos.sh"
+echo "============================================================"

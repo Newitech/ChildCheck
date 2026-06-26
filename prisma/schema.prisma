@@ -46,6 +46,8 @@ model Person {
   id           String   @id @default(cuid())
   firstName    String
   lastName     String
+  /// Optional middle name (full middle name or just an initial — free text).
+  middleName   String?
   /// name helpers
   preferredName String?
   /// contact (Adult primarily)
@@ -99,6 +101,22 @@ model User {
   updatedAt    DateTime @updatedAt
   person       Person   @relation(fields: [personId], references: [id], onDelete: Cascade)
   roles        UserRole[]
+  resetTokens  PasswordResetToken[]
+}
+
+/// Single-use, short-TTL token for email-based password recovery.
+/// `tokenHash` = SHA-256(token) — the raw token is never stored.
+/// Created by /api/auth/forgot-password, consumed by /api/auth/reset-password.
+model PasswordResetToken {
+  id         String   @id @default(cuid())
+  userId     String
+  tokenHash  String   @unique
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 /// Role assignments for a user. `role` is one of:
@@ -589,5 +607,43 @@ model LabelTemplate {
   isDefault Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Task EM — SMTP configuration (email sending)
+//
+// Stores the org's outbound mail server config so the app can send real email
+// (password recovery links, report deliveries, notifications). The SMTP
+// password is stored AES-256-GCM encrypted at rest (see src/lib/crypto.ts +
+// src/lib/email.ts) — NEVER in plaintext. The decryption key is
+// CHILDCHECK_DATA_KEY (the same one used for photos + backups).
+//
+// Singleton row (id = "default"). getSmtpSettings() returns null when the row
+// is missing, the host is empty, or isActive is false — callers must
+// gracefully degrade with a clear "smtp_not_configured" error.
+//
+// Environment-variable fallback: if SMTP_HOST / SMTP_PORT / SMTP_USER /
+// SMTP_PASS / SMTP_FROM are set, they take precedence over the DB row (so a
+// deploy can ship SMTP via env without ever touching the admin UI). The admin
+// UI is the runtime-editable path; env is the immutable deploy-time path.
+// ---------------------------------------------------------------------------
+
+model SmtpConfig {
+  id             String   @id @default("default")
+  host           String   @default("")
+  port           Int      @default(587)
+  /// "starttls" (port 587) | "ssl" (port 465) | "none" (port 25, not recommended).
+  security       String   @default("starttls")
+  username       String   @default("")
+  /// AES-256-GCM encrypted (using src/lib/crypto.ts) — NOT plaintext.
+  /// Format: base64(iv || tag || ciphertext) — see email.ts encode/decode helpers.
+  passwordEnc    String   @default("")
+  fromAddress    String   @default("")
+  fromName       String   @default("ChildCheck")
+  /// Last test status: "untested" | "ok" | "fail:<message>".
+  lastTestStatus String   @default("untested")
+  lastTestAt     DateTime?
+  isActive       Boolean  @default(false)
+  updatedAt      DateTime @updatedAt
 }
 

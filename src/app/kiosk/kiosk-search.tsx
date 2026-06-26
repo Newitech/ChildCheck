@@ -26,6 +26,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { useTerminology } from "@/hooks/use-terminology";
+import { formatFullName } from "@/lib/people";
 
 export interface KioskSessionSummary {
   programId: string | null;
@@ -45,7 +46,7 @@ export interface KioskSearchProps {
 interface SearchResultItem {
   familyId: string;
   familyName: string;
-  primaryCarers: { firstName: string; lastName: string }[];
+  primaryCarers: { firstName: string; middleName: string | null; lastName: string }[];
   childCount: number;
   hasAlerts: boolean;
 }
@@ -264,9 +265,7 @@ function FamilyResultCard({
   const carerLabel =
     item.primaryCarers.length === 0
       ? "—"
-      : item.primaryCarers
-          .map((c) => `${c.firstName} ${c.lastName}`)
-          .join(", ");
+      : item.primaryCarers.map((c) => formatFullName(c)).join(", ");
   return (
     <button
       type="button"

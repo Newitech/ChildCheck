@@ -450,6 +450,7 @@ export async function POST(req: Request) {
         roomId: meta?.roomId ?? null,
         classId: c.classId,
         programId,
+        eventId: eventId ?? null,
         checkInSessionId: result.sessionId,
       })) {
         scopeRooms.add(r);

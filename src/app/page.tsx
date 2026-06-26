@@ -132,7 +132,7 @@ export default async function Home() {
               <Feature icon={LayoutDashboard} title="Multi-room check-in" desc="Sign siblings into different classes in one action — tick-boxes, not drop-downs." />
               <Feature icon={WifiOff} title="Offline-resilient" desc="The kiosk keeps working through network blips and resyncs when connectivity returns." />
               <Feature icon={Users} title="Visitors & first-timers" desc="Quick-add a visitor family for the day — with an option to keep them out of the regular database." />
-              <Feature icon={QrCode} title="QR check-in (roadmap)" desc="A unique family QR code for pre-check is designed-for and coming in a future phase." />
+              <Feature icon={QrCode} title="QR check-in (planned)" desc="A unique family QR code for pre-check is designed-for and on the roadmap." />
             </div>
           </div>
         </section>

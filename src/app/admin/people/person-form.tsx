@@ -41,6 +41,7 @@ interface Props {
 
 type Form = {
   firstName: string;
+  middleName: string;
   lastName: string;
   preferredName: string;
   personType: "Adult" | "Child";
@@ -59,6 +60,7 @@ type Form = {
 
 const empty: Form = {
   firstName: "",
+  middleName: "",
   lastName: "",
   preferredName: "",
   personType: "Adult",
@@ -93,6 +95,7 @@ export function PersonForm({ open, onOpenChange, editing, onSaved }: Props) {
           if (!res.ok) throw new Error(`status ${res.status}`);
           const d = (await res.json()) as {
             firstName: string;
+            middleName: string | null;
             lastName: string;
             preferredName: string | null;
             personType: string;
@@ -110,6 +113,7 @@ export function PersonForm({ open, onOpenChange, editing, onSaved }: Props) {
           };
           setForm({
             firstName: d.firstName,
+            middleName: d.middleName ?? "",
             lastName: d.lastName,
             preferredName: d.preferredName ?? "",
             personType: (d.personType === "Child" ? "Child" : "Adult"),
@@ -147,6 +151,7 @@ export function PersonForm({ open, onOpenChange, editing, onSaved }: Props) {
     try {
       const payload: Record<string, unknown> = {
         firstName: form.firstName.trim(),
+        middleName: form.middleName.trim() || null,
         lastName: form.lastName.trim(),
         preferredName: form.preferredName.trim() || null,
         personType: form.personType,
@@ -220,11 +225,18 @@ export function PersonForm({ open, onOpenChange, editing, onSaved }: Props) {
 
             <div className="overflow-y-auto scroll-thin px-1 py-3 flex-1">
               <TabsContent value="identity" className="space-y-4 mt-0">
-                <div className="grid sm:grid-cols-2 gap-4">
+                <div className="grid sm:grid-cols-3 gap-4">
                   <Field label="First name" required>
                     <Input
                       value={form.firstName}
                       onChange={(e) => setForm({ ...form, firstName: e.target.value })}
+                      maxLength={80}
+                    />
+                  </Field>
+                  <Field label="Middle name" hint="Optional — full name or initial">
+                    <Input
+                      value={form.middleName}
+                      onChange={(e) => setForm({ ...form, middleName: e.target.value })}
                       maxLength={80}
                     />
                   </Field>

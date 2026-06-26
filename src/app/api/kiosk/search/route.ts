@@ -30,7 +30,7 @@ export const dynamic = "force-dynamic";
 export interface KioskSearchResultItem {
   familyId: string;
   familyName: string;
-  primaryCarers: { firstName: string; lastName: string }[];
+  primaryCarers: { firstName: string; middleName: string | null; lastName: string }[];
   childCount: number;
   hasAlerts: boolean;
 }
@@ -113,6 +113,7 @@ export async function GET(req: Request) {
               person: {
                 OR: [
                   { firstName: { contains: q } },
+                  { middleName: { contains: q } },
                   { lastName: { contains: q } },
                   { email: { contains: q } },
                   { phone: { contains: q } },
@@ -132,6 +133,7 @@ export async function GET(req: Request) {
             select: {
               id: true,
               firstName: true,
+              middleName: true,
               lastName: true,
               personType: true,
               allergies: true,
@@ -150,7 +152,11 @@ export async function GET(req: Request) {
   const items: KioskSearchResultItem[] = families.map((f) => {
     const carers = f.members
       .filter((m) => m.role === "PrimaryCarer" && m.person.personType === "Adult")
-      .map((m) => ({ firstName: m.person.firstName, lastName: m.person.lastName }));
+      .map((m) => ({
+        firstName: m.person.firstName,
+        middleName: m.person.middleName,
+        lastName: m.person.lastName,
+      }));
     const childMembers = f.members.filter((m) => m.role === "Child");
     const hasAlerts =
       childMembers.some(

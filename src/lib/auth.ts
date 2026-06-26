@@ -112,6 +112,37 @@ export const authOptions: NextAuthOptions = {
     signIn: "/login",
     signOut: "/",
   },
+  // Cookies must be SameSite=None; Secure so the session survives in the
+  // cross-origin Preview Panel iframe (which browsers otherwise block as a
+  // third-party cookie). The Caddy gateway terminates TLS, so Secure works.
+  cookies: {
+    sessionToken: {
+      name: "next-auth.session-token",
+      options: {
+        httpOnly: true,
+        sameSite: "none",
+        path: "/",
+        secure: true,
+      },
+    },
+    csrfToken: {
+      name: "next-auth.csrf-token",
+      options: {
+        httpOnly: true,
+        sameSite: "none",
+        path: "/",
+        secure: true,
+      },
+    },
+    callbackUrl: {
+      name: "next-auth.callback-url",
+      options: {
+        sameSite: "none",
+        path: "/",
+        secure: true,
+      },
+    },
+  },
   providers: [
     CredentialsProvider({
       id: "credentials",

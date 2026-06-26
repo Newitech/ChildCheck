@@ -24,13 +24,13 @@ binary.
 ### Option A — download + install in one command
 
 ```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Newitech/ChildCheck/main/install/install-linux.sh)"
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/childcheck/childcheck/main/install/install-linux.sh)"
 ```
 
 ### Option B — clone + run locally
 
 ```bash
-git clone https://github.com/Newitech/ChildCheck.git
+git clone https://github.com/childcheck/childcheck.git
 cd childcheck
 sudo bash install/install-linux.sh
 ```

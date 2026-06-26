@@ -49,7 +49,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { PersonForm } from "./person-form";
-import type { PersonListDTO } from "@/lib/people";
+import { formatFullName, type PersonListDTO } from "@/lib/people";
 
 interface Props {
   currentUserId: string;
@@ -127,7 +127,7 @@ export function PeopleList({ currentUserId }: Props) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error ?? `status ${res.status}`);
       }
-      toast.success(`${deleting.firstName} ${deleting.lastName} archived.`);
+      toast.success(`${formatFullName(deleting)} archived.`);
       setDeleting(null);
       void load();
     } catch (e) {
@@ -256,7 +256,7 @@ export function PeopleList({ currentUserId }: Props) {
                         href={`/admin/people/${p.id}`}
                         className="font-medium hover:underline"
                       >
-                        {p.firstName} {p.lastName}
+                        {formatFullName(p)}
                       </Link>
                       {p.preferredName && (
                         <span className="block text-xs text-muted-foreground">
@@ -345,7 +345,7 @@ export function PeopleList({ currentUserId }: Props) {
                           <AlertDialogContent>
                             <AlertDialogHeader>
                               <AlertDialogTitle>
-                                Archive {p.firstName} {p.lastName}?
+                                Archive {formatFullName(p)}?
                               </AlertDialogTitle>
                               <AlertDialogDescription>
                                 This soft-deletes the record (sets <code>isActive=false</code>).

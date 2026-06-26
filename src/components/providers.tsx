@@ -26,6 +26,12 @@ export interface PublicConfig {
   terminology: Terminology;
   flags: Record<string, boolean>;
   orgType?: string;
+  /**
+   * Realtime (Socket.io) mini-service port, read from REALTIME_PORT (default
+   * 3003) by /api/config. The client uses this in `io("/?XTransformPort=<port>")`
+   * so the realtime port can be reconfigured without code changes.
+   */
+  realtimePort?: number;
 }
 
 interface ConfigContextValue {

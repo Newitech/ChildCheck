@@ -1,0 +1,42 @@
+# =============================================================================
+# ChildCheck — Caddyfile template for INTERNET-FACING deployments
+# =============================================================================
+#
+# Use this template when you have a real DNS A/AAAA record pointing at the
+# ChildCheck host (e.g. checkin.mychurch.org). Caddy will automatically
+# provision + renew a Let's Encrypt certificate for the domain.
+#
+# Install steps (handled automatically by install/install-linux.sh --tls):
+#
+#   1. Install Caddy:        https://caddyserver.com/docs/install#debian-ubuntu-fedora-arch
+#   2. Copy this file to:    /etc/caddy/Caddyfile     (Linux)
+#                            /opt/homebrew/etc/caddy/Caddyfile  (macOS Apple Silicon)
+#                            /usr/local/etc/caddy/Caddyfile     (macOS Intel)
+#   3. Set DOMAIN + PORT env vars (or hard-code them below by replacing
+#      {$DOMAIN} and {$PORT:-3000}).
+#   4. Open ports 80 + 443 in the host firewall (Let's Encrypt HTTP-01 challenge
+#      needs 80; clients need 443).
+#   5. Reload Caddy:         sudo systemctl reload caddy   (Linux)
+#                            brew services restart caddy    (macOS)
+#
+# After Caddy is up, update NEXTAUTH_URL in your ChildCheck .env to the HTTPS URL
+# so NextAuth marks its session cookies `Secure` (which only travel over TLS).
+#
+# =============================================================================
+{$DOMAIN} {
+	# Reverse-proxy to the ChildCheck process (default port 3000).
+	reverse_proxy localhost:{$PORT:3000}
+
+	# Security headers — defence in depth alongside the app's own.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+	}
+
+	# Socket.io (the realtime mini-service is served via the Next.js app's
+	# /socket.io/ path) — Caddy auto-upgrades to WebSocket, no special config
+	# needed.
+}

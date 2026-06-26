@@ -172,6 +172,8 @@ export function LoginForm() {
           </form>
         </Form>
 
+        <ForgotPasswordLink />
+
         <div className="mt-4 flex items-center justify-between">
           <Button asChild variant="ghost" size="sm">
             <Link href="/">
@@ -184,5 +186,92 @@ export function LoginForm() {
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function ForgotPasswordLink() {
+  // Only shown when email_recovery is ON (read from config). Renders a small
+  // "Forgot password?" link that opens a dialog asking for the email + calls
+  // /api/auth/forgot-password.
+  const [open, setOpen] = useState(false);
+  const [email, setEmail] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [done, setDone] = useState(false);
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      setDone(true);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 text-center">
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+      >
+        Forgot password?
+      </button>
+      {open && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setOpen(false)}
+        >
+          <div
+            className="bg-card border rounded-lg shadow-lg p-6 w-full max-w-sm"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {done ? (
+              <div className="space-y-3 text-center">
+                <p className="text-sm">
+                  If an account exists for <strong>{email}</strong>, a reset
+                  link has been sent. Check your inbox (and spam folder).
+                </p>
+                <Button onClick={() => { setOpen(false); setDone(false); setEmail(""); }} className="w-full">
+                  Close
+                </Button>
+              </div>
+            ) : (
+              <form onSubmit={onSubmit} className="space-y-3">
+                <h3 className="font-semibold text-center">Reset your password</h3>
+                <p className="text-xs text-muted-foreground text-center">
+                  Enter your account email and we&apos;ll send you a reset link
+                  (valid for 30 minutes).
+                </p>
+                <Input
+                  type="email"
+                  placeholder="you@example.org"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  autoFocus
+                />
+                <Button type="submit" className="w-full" disabled={submitting}>
+                  {submitting ? "Sending…" : "Send reset link"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="w-full"
+                  onClick={() => setOpen(false)}
+                >
+                  Cancel
+                </Button>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

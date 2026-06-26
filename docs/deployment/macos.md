@@ -23,13 +23,13 @@ Bun-compiled binary.
 ### Option A — download + install in one command
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/Newitech/ChildCheck/main/install/install-macos.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/childcheck/childcheck/main/install/install-macos.sh)"
 ```
 
 ### Option B — clone + run locally
 
 ```bash
-git clone https://github.com/Newitech/ChildCheck.git
+git clone https://github.com/childcheck/childcheck.git
 cd childcheck
 bash install/install-macos.sh
 ```

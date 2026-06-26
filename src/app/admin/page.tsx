@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   Users,
+  UserCog,
   CalendarRange,
   CalendarDays,
   DoorOpen,
@@ -14,6 +15,7 @@ import {
   ArrowRight,
   Printer,
   Fingerprint,
+  Plug,
   type LucideIcon,
 } from "lucide-react";
 
@@ -30,8 +32,7 @@ interface SectionCard {
   icon: LucideIcon;
   title: string;
   desc: string;
-  stage: number;
-  /** If set, the card links to this route instead of showing "Coming soon". */
+  /** If set, the card links to this route. */
   href?: string;
 }
 
@@ -40,63 +41,67 @@ const SECTIONS: SectionCard[] = [
     icon: Users,
     title: "People & Families",
     desc: "Adults, children, family memberships, encrypted photos, WWCC tracking.",
-    stage: 3,
     href: "/admin/people",
+  },
+  {
+    icon: UserCog,
+    title: "Users & Roles",
+    desc: "Login accounts, roles (Admin/Teacher/Volunteer/Kiosk/Security/PeopleManager), passwords + PINs.",
+    href: "/admin/users",
   },
   {
     icon: Palette,
     title: "Branding & Toggles",
     desc: "Organisation name, colours, terminology overrides, feature flags, org type.",
-    stage: 2,
     href: "/admin/settings",
   },
   {
     icon: CalendarRange,
     title: "Programs & Classes",
     desc: "Sabbath School / Pathfinders / custom programs, rooms, schedules.",
-    stage: 5,
     href: "/admin/programs",
   },
   {
     icon: ScanLine,
     title: "Kiosk configuration",
-    desc: "Kiosk accounts, open vs locked mode, search fields, label printers.",
-    stage: 6,
+    desc: "Open vs locked mode, guardian PIN sign-in, label printing, photo verification — all feature toggles.",
+    href: "/admin/settings#cat-kiosk",
   },
   {
     icon: Printer,
     title: "Printers & Labels",
     desc: "Printer CRUD (browser / QZ Tray / thermal raw), room assignments, label template editor.",
-    stage: 11,
     href: "/admin/printers",
   },
   {
     icon: BarChart3,
     title: "Reports",
     desc: "Headcounts, attendance trends, sign-in/sign-out history, exports.",
-    stage: 10,
     href: "/admin/reports",
   },
   {
     icon: ArrowUpDown,
     title: "Import / Export",
     desc: "Bulk CSV import of people/families. Export for backups & migrations.",
-    stage: 12,
     href: "/admin/data",
   },
   {
     icon: DatabaseBackup,
     title: "Backup & Restore",
     desc: "Encrypted, downloadable, restorable backups — scheduled or manual.",
-    stage: 13,
     href: "/admin/backup",
   },
   {
     icon: Fingerprint,
     title: "Audit log",
     desc: "Tamper-evident, hash-chained record of every sensitive action. Verify chain integrity.",
-    stage: 16,
     href: "/admin/audit",
+  },
+  {
+    icon: Plug,
+    title: "Elvanto connector",
+    desc: "Import/export people & families from/to Elvanto CSV. Dry-run preview, idempotent matching, quick-add.",
+    href: "/admin/integrations/elvanto",
   },
 ];
 
@@ -115,8 +120,7 @@ export default async function AdminHomePage() {
               Welcome, {user?.name ?? "Admin"}
             </CardTitle>
             <CardDescription>
-              This is the ChildCheck admin console. Core people/program/kiosk
-              management arrives across Stages 2&ndash;13.
+              Manage people, families, programs, the kiosk, reports, backups and security.
             </CardDescription>
             <div className="flex flex-wrap gap-1.5 pt-1">
               {(user?.roles ?? []).map((r) => (
@@ -130,6 +134,11 @@ export default async function AdminHomePage() {
             <Button asChild variant="outline" size="sm">
               <Link href="/admin/people">
                 <Users className="mr-1.5 h-4 w-4" /> People
+              </Link>
+            </Button>
+            <Button asChild variant="outline" size="sm">
+              <Link href="/admin/users">
+                <UserCog className="mr-1.5 h-4 w-4" /> Users
               </Link>
             </Button>
             <Button asChild variant="outline" size="sm">
@@ -195,23 +204,37 @@ export default async function AdminHomePage() {
         </CardHeader>
       </Card>
 
-      {/* System status */}
-      <Card>
-        <CardContent className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div className="text-sm">
-            <span className="text-muted-foreground">Organisation:</span>{" "}
-            <span className="font-medium">{orgName}</span>
-          </div>
-          <Button asChild variant="ghost" size="sm" className="text-primary">
-            <Link href="/admin/settings">
-              Manage branding &amp; feature toggles <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
-            </Link>
-          </Button>
-        </CardContent>
-      </Card>
-
-      {/* Updates checker */}
-      <UpdatesCard />
+      {/* Updates + system status row */}
+      <section>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <UpdatesCard />
+          <Card className="sm:col-span-1 lg:col-span-2">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <Settings className="h-5 w-5" />
+                </span>
+              </div>
+              <CardTitle className="text-base mt-2">Organisation</CardTitle>
+              <CardDescription className="text-sm leading-relaxed">
+                <span className="text-muted-foreground">Active org:</span>{" "}
+                <span className="font-medium text-foreground">{orgName}</span>
+                <br />
+                Manage branding, terminology, feature flags, calendar week-start
+                and the daily code format.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <Button asChild variant="outline" size="sm">
+                <Link href="/admin/settings">
+                  Manage branding &amp; feature toggles{" "}
+                  <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+                </Link>
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </section>
 
       {/* Sections grid */}
       <section>
@@ -227,9 +250,6 @@ export default async function AdminHomePage() {
                     <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
                       <s.icon className="h-5 w-5" />
                     </span>
-                    <Badge variant="outline" className="text-[10px]">
-                      Stage {s.stage}
-                    </Badge>
                   </div>
                   <CardTitle className="text-base mt-2">{s.title}</CardTitle>
                   <CardDescription className="text-sm leading-relaxed">
@@ -238,7 +258,7 @@ export default async function AdminHomePage() {
                 </CardHeader>
                 <CardContent className="pt-0">
                   <span className="inline-flex items-center text-xs text-muted-foreground">
-                    {s.href ? "Open" : "Coming soon"}
+                    {s.href ? "Open" : "Not yet available"}
                   </span>
                 </CardContent>
               </>

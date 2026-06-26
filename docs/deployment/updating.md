@@ -8,6 +8,43 @@ How to update to a new version of ChildCheck without losing data.
 > ⚠️ Read the release notes for any breaking changes (schema migrations,
 > config format changes, required env vars) before updating.
 
+## Hybrid update system (overview)
+
+ChildCheck ships with **two complementary update mechanisms**:
+
+1. **In-app update checker** (read-only). On `/admin` an "Updates" card shows
+   the installed version + the latest GitHub release + whether an update is
+   available. It does **not** apply the update — it only checks.
+2. **External update mechanism** (operator-initiated). One of:
+   - **Native installs** → run `install/childcheck-update.sh` (Linux / macOS /
+     Synology). Stops the service, backs up, downloads the latest release,
+     extracts, runs `db:push`, restarts, health-checks.
+   - **Docker installs** → `docker compose pull && docker compose up -d`. One
+     command; the entrypoint runs `db:push` on boot.
+
+The split is intentional: the in-app checker is always safe (it only fetches
+the public GitHub releases API), while applying an update is always an
+explicit, operator-initiated action that can be rolled back.
+
+### Enabling the in-app update checker
+
+The checker is **disabled by default**. Enable it by setting the
+`CHILDCHETECK_UPDATE_REPO` env var to the public ChildCheck GitHub repo:
+
+```bash
+# .env (native) or docker-compose.yml environment (Docker)
+CHILDCHETECK_UPDATE_REPO=childcheck/childcheck
+```
+
+Leave it unset to disable update checking entirely (the Updates card will show
+"Update checking is disabled").
+
+The checker fetches `https://api.github.com/repos/<repo>/releases/latest` with
+no authentication (public repos only). Results are cached in-memory for 1 hour
+so repeated admin page loads don't hit the GitHub API rate limit (60 req/hour
+per IP for unauthenticated requests). The "Check now" button on the Updates
+card bypasses the cache.
+
 ## General update flow
 
 Every update does the same three things:
@@ -24,8 +61,14 @@ the release notes will say so explicitly.
 
 ```bash
 cd /path/to/childcheck
+docker compose pull            # pull the latest image
+docker compose up -d           # recreate the container with the new image
+```
+
+If you built from source instead of pulling a prebuilt image:
+
+```bash
 git pull                       # get the latest Dockerfile + docker-compose.yml
-docker compose pull            # if using a prebuilt image; otherwise:
 docker compose up -d --build   # rebuild with the new code
 ```
 
@@ -40,26 +83,68 @@ docker compose logs -f childcheck | head -20
 curl http://localhost:3000/api/config | jq .
 ```
 
-## Linux native
+## Native (Linux / macOS / Synology) — the update script
+
+The fastest path: run the bundled update script. It detects the install,
+stops the service, backs up the current binary + DB, downloads the latest
+release tarball from GitHub, extracts it over the install dir (preserving
+your `data/` / `db/` / `config/` symlinks), runs `db:push`, restarts the
+service, and waits for the health endpoint.
 
 ```bash
-# 1. Back up (always).
-sudo systemctl stop childcheck
-sudo cp -a /var/lib/childcheck /var/lib/childcheck.pre-update.$(date +%Y%m%d%H%M%S)
+# Latest release:
+sudo bash /opt/childcheck/install/childcheck-update.sh
 
-# 2. Download the new tarball + run the installer over the existing install.
-#    The installer detects the existing install, prompts to overwrite, and
-#    backs up the old install dir automatically.
-sudo bash install/install-linux.sh /path/to/childcheck-linux-x64.tar.gz
+# Or download + run from anywhere:
+curl -fsSL https://github.com/childcheck/childcheck/raw/main/install/childcheck-update.sh \
+  | sudo bash
 
-# 3. The installer restarts the service automatically. Verify:
-systemctl status childcheck
-journalctl -u childcheck -f
+# Pin a specific version:
+sudo bash install/childcheck-update.sh --version v1.2.0
+
+# Override the repo (if you fork):
+sudo bash install/childcheck-update.sh --repo yourorg/childcheck
+
+# Override the install dir (if non-standard):
+sudo bash install/childcheck-update.sh --dir /opt/childcheck
 ```
 
-If you only want to swap the binary without re-running the installer:
+The script:
+
+1. Detects platform + arch (`linux-x64`, `linux-arm64`, `macos-arm64`).
+2. Auto-detects the install dir: `/volume1/@appstore/ChildCheck` (Synology),
+   `/opt/childcheck` (Linux systemd), or `/Applications/ChildCheck` (macOS).
+3. Detects the service manager (systemd, launchd, or pkill for Synology).
+4. **Stops the service** (`systemctl stop`, `launchctl unload`, or `pkill`).
+5. **Backs up** the current binary + server.js + `.next` + `public` + `prisma`
+   + the SQLite DB to `<install>.bak.<timestamp>`. **Never touches `data/` or
+   `config/`.**
+6. Downloads the latest (or `--version`) release tarball from GitHub.
+7. Extracts it over the install dir, preserving the `data/` / `db/` / `config/`
+   symlinks.
+8. Runs `childcheck db-push` to apply schema migrations.
+9. **Restarts the service**.
+10. **Waits for `/api/config`** (or `--health-url`) to return 200 — up to 120s.
+11. Prints the result + rollback instructions if anything failed.
+
+Flags:
+
+| Flag | Purpose |
+|---|---|
+| `--version vX.Y.Z` | Pin a specific version (default: latest release). |
+| `--repo childcheck/childcheck` | Override the GitHub repo slug. |
+| `--dir /opt/childcheck` | Override the install dir (skip auto-detect). |
+| `--health-url URL` | Override the health endpoint (default: `http://localhost:3000/api/config`). |
+| `--service-name NAME` | Override the systemd unit name (default: `childcheck`). |
+| `--no-restart` | Don't stop/start the service (you'll restart manually). |
+| `--skip-db-push` | Don't run `db:push` after extracting (rare). |
+
+### Manual native update (without the script)
+
+If you prefer to swap the binary by hand:
 
 ```bash
+# Linux:
 sudo systemctl stop childcheck
 sudo cp /path/to/new/childcheck /opt/childcheck/childcheck
 sudo chmod +x /opt/childcheck/childcheck
@@ -70,18 +155,12 @@ sudo systemctl start childcheck
 journalctl -u childcheck -f | head -20
 ```
 
-## macOS native
-
 ```bash
-# 1. Back up.
+# macOS:
 launchctl unload ~/Library/LaunchAgents/org.childcheck.plist
-cp -a ~/Library/Application\ Support/ChildCheck ~/Library/Application\ Support/ChildCheck.pre-update.$(date +%Y%m%d%H%M%S)
-
-# 2. Run the installer over the existing install.
-bash install/install-macos.sh /path/to/childcheck-macos-arm64.tar.gz
-
-# 3. Verify.
-launchctl list | grep childcheck
+sudo cp /path/to/new/childcheck /Applications/ChildCheck/childcheck
+sudo cp -R /path/to/new/.next/standalone/. /Applications/ChildCheck/
+launchctl load ~/Library/LaunchAgents/org.childcheck.plist
 tail -f ~/Library/Application\ Support/ChildCheck/logs/childcheck.stdout.log
 ```
 
@@ -100,20 +179,6 @@ Get-Service ChildCheck
 Get-Content "C:\ProgramData\ChildCheck\logs\*.log" -Tail 50
 ```
 
-## Synology NAS
-
-```bash
-# 1. Back up.
-pkill -f "/volume1/@appstore/ChildCheck/childcheck"
-cp -a /volume1/childcheck /volume1/childcheck.pre-update.$(date +%Y%m%d%H%M%S)
-
-# 2. Run the installer over the existing install.
-bash install/install-nas-synology.sh /path/to/childcheck-linux-x64.tar.gz
-
-# 3. Verify.
-tail -f /volume1/childcheck/logs/childcheck.stdout.log
-```
-
 ## Rolling back
 
 If the new version doesn't come up cleanly, roll back:
@@ -126,10 +191,10 @@ git checkout <previous-commit>
 docker compose up -d --build
 ```
 
-### Native (Linux/macOS/Windows/Synology)
+### Native (Linux/macOS/Synology)
 ```bash
 # Stop the service.
-# Move the new install aside + restore the backup the installer created:
+# Move the new install aside + restore the backup the update script created:
 sudo mv /opt/childcheck /opt/childcheck.failed-update
 sudo mv /opt/childcheck.bak.<timestamp> /opt/childcheck
 # Restart.
@@ -142,20 +207,45 @@ backup:
 
 ```bash
 sudo systemctl stop childcheck
-sudo cp /var/lib/childcheck.pre-update.<timestamp>/db/custom.db /var/lib/childcheck/db/custom.db
+sudo cp /opt/childcheck.bak.<timestamp>/db/custom.db /var/lib/childcheck/db/custom.db
 sudo systemctl start childcheck
 ```
+
+The update script prints the exact rollback commands (with the right
+timestamp) at the end of every run, including on failure.
 
 ## Verifying the update
 
 1. **Check the version** (native installs): `childcheck version`
 2. **Check `/api/config`**: `curl -s http://localhost:3000/api/config | jq .orgType`
-3. **Sign in as admin** → browse `/admin` → look at the bottom of the page for
-   the version footer (if present in that release).
+3. **Sign in as admin** → browse `/admin` → look at the "Updates" card at the
+   top — it shows the installed version + whether an update is available.
 4. **Test the kiosk**: do a test check-in + check-out to confirm the
    end-to-end flow still works.
 5. **Check the logs** for any errors during the first 5 minutes of post-update
    traffic.
+
+## When to update
+
+Recommend updating during **low-traffic times** — e.g. Monday morning, not
+Sabbath morning right before services start. The update itself takes <1 minute
+(native) or a few seconds (Docker), but the health check + first-request
+warm-up can add 30–60s. Plan for a 5-minute window.
+
+## Version pinning
+
+To stay on a specific version instead of always tracking `latest`:
+
+- **Docker**: pin the image tag in `docker-compose.yml`:
+  ```yaml
+  image: ghcr.io/childcheck/childcheck:v1.2.0
+  ```
+  Then `docker compose up -d` (no `pull`).
+- **Native**: pass `--version v1.2.0` to `install/childcheck-update.sh`, or
+  download the specific release tarball from GitHub:
+  ```
+  https://github.com/childcheck/childcheck/releases/tag/v1.2.0
+  ```
 
 ## Schema migrations
 

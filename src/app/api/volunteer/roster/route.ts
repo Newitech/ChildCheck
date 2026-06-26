@@ -7,7 +7,7 @@ import { startOfDayUTC } from "@/lib/daily-code";
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/volunteer/roster?roomId=&classId=&programId=&date=
+ * GET /api/volunteer/roster?roomId=&classId=&programId=&eventId=&date=
  *
  * Returns the currently-checked-in children for the requested scope on the
  * requested date (defaults to today). "Currently checked in" = CheckInRecord
@@ -20,7 +20,14 @@ export const dynamic = "force-dynamic";
  *   - classId (optional) — restrict to children checked in to this class
  *   - programId (optional) — restrict to children checked in to this program's
  *     sessions today
+ *   - eventId (optional) — restrict to children checked in to this event's
+ *     session today
  *   - date (optional, ISO yyyy-mm-dd) — defaults to today
+ *
+ * If NO scope filter (roomId/classId/programId/eventId) is provided, returns
+ * ALL currently-checked-in children for the date (the volunteer dashboard's
+ * "All" scope). Allowed for Admin / Security / Teacher / Volunteer —
+ * teacher-class scoping arrives in a later stage (see worklog Q3).
  *
  * The response includes child name, age, family name, class, room, checkedInAt,
  * and allergy/medical DETAILS (teachers need this for safety — they have a
@@ -28,7 +35,7 @@ export const dynamic = "force-dynamic";
  * is deliberately relaxed here for teachers/volunteers with view_roster —
  * they cannot safely care for children without knowing their allergies.
  *
- * Returns: { items: RosterChild[], scope: { roomId, classId, programId, date } }
+ * Returns: { items: RosterChild[], scope: { roomId, classId, programId, eventId, date } }
  */
 export async function GET(req: Request) {
   const user = await getCurrentUser();
@@ -43,6 +50,7 @@ export async function GET(req: Request) {
   const roomId = url.searchParams.get("roomId")?.trim() || null;
   const classId = url.searchParams.get("classId")?.trim() || null;
   const programId = url.searchParams.get("programId")?.trim() || null;
+  const eventId = url.searchParams.get("eventId")?.trim() || null;
   const dateParam = url.searchParams.get("date")?.trim() || null;
   const date = dateParam ? new Date(dateParam) : new Date();
   if (Number.isNaN(date.getTime())) {
@@ -58,15 +66,20 @@ export async function GET(req: Request) {
   // Build the WHERE clause for CheckInRecord.
   // - checkedInAt within [dayStart, dayEnd)
   // - checkedOutAt IS NULL (still in care)
-  // - scope filters
+  // - scope filters (any combination)
+  // - if NO scope filter is provided, return ALL checked-in children for the
+  //   date (the volunteer dashboard's "All" scope).
   const where: Record<string, unknown> = {
     checkedInAt: { gte: dayStart, lt: dayEnd },
     checkedOutAt: null,
   };
   if (roomId) where.roomId = roomId;
   if (classId) where.classId = classId;
-  if (programId) {
-    where.checkInSession = { programId };
+  if (programId || eventId) {
+    const sessionWhere: Record<string, unknown> = {};
+    if (programId) sessionWhere.programId = programId;
+    if (eventId) sessionWhere.eventId = eventId;
+    where.checkInSession = sessionWhere;
   }
 
   const records = await db.checkInRecord.findMany({
@@ -207,6 +220,7 @@ export async function GET(req: Request) {
       roomId,
       classId,
       programId,
+      eventId,
       date: dayStart.toISOString(),
     },
     count: items.length,

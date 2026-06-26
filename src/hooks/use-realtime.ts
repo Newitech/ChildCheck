@@ -3,12 +3,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 
+import { useConfig } from "@/hooks/use-config";
+
 /**
  * useRealtime — Socket.io client hook for the volunteer dashboard.
  *
- * Connects to the realtime mini-service via `io("/?XTransformPort=3003")`
- * (relative path + XTransformPort query — NEVER a direct localhost URL —
- * so Caddy can forward to the right port).
+ * Connects to the realtime mini-service via
+ * `io("/?XTransformPort=<realtimePort>")` (relative path + XTransformPort
+ * query — NEVER a direct localhost URL — so Caddy can forward to the right
+ * port). The realtime port is read from /api/config (`realtimePort` field,
+ * itself populated from the `REALTIME_PORT` env var, default 3003) so an
+ * operator who reconfigures the realtime port (e.g. because 3003 is already
+ * in use) does NOT need to also rebuild/redeploy the client.
  *
  * Joins the given room (e.g. "room:abc123") and forwards these events to the
  * callback:
@@ -27,6 +33,12 @@ export function useRealtime(
   room: string | null,
   onEvent: (event: string, payload: unknown) => void,
 ): { connected: boolean } {
+  const { config } = useConfig();
+  // Resolve the realtime port once per render. Falls back to 3003 (the
+  // default) if config hasn't loaded yet or doesn't include the field —
+  // this keeps the hook usable on first paint before /api/config resolves.
+  const realtimePort = config?.realtimePort ?? 3003;
+
   // socketConnected is ONLY updated from socket event callbacks (not in the
   // effect body) — this satisfies the react-hooks/set-state-in-effect rule.
   const [socketConnected, setSocketConnected] = useState(false);
@@ -48,8 +60,9 @@ export function useRealtime(
 
     // Connect to the realtime mini-service via Caddy using XTransformPort.
     // NEVER use io("http://localhost:3003") — that would bypass the gateway
-    // and fail in the sandbox preview.
-    const socket: Socket = io("/?XTransformPort=3003", {
+    // and fail in the sandbox preview. The port comes from /api/config so
+    // operators who change REALTIME_PORT are picked up automatically.
+    const socket: Socket = io(`/?XTransformPort=${realtimePort}`, {
       transports: ["websocket", "polling"],
       forceNew: true,
       reconnection: true,
@@ -87,7 +100,7 @@ export function useRealtime(
       socket.disconnect();
       setSocketConnected(false);
     };
-  }, [room]);
+  }, [room, realtimePort]);
 
   // Derived: we're "connected" only if we have a room AND the socket reports
   // a live connection.

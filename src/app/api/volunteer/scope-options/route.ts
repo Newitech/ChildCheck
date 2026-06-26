@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { db } from "@/lib/db";
 import { getCurrentUser, hasPermission } from "@/lib/auth";
+import { startOfDayUTC } from "@/lib/daily-code";
 import { getActiveProgramsForDate } from "@/lib/sessions";
 
 export const dynamic = "force-dynamic";
@@ -13,6 +14,9 @@ export const dynamic = "force-dynamic";
  *   - rooms: all active rooms
  *   - classes: all active classes (with program + room)
  *   - programs: all active programs
+ *   - events: all active events whose date is today or later (next upcoming
+ *     first), so the volunteer can pick "Event" scope and view check-ins for
+ *     a specific event's session.
  *   - todayActive: programs active today (recurring + events) — used as the
  *     default scope suggestion
  *
@@ -27,7 +31,12 @@ export async function GET() {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
-  const [rooms, classes, programs, todayActive] = await Promise.all([
+  // Events from the start of today onward — upcoming first. Past events are
+  // excluded so the dropdown stays short, but "today" is included so an event
+  // happening right now can be picked.
+  const startOfToday = startOfDayUTC(new Date());
+
+  const [rooms, classes, programs, events, todayActive] = await Promise.all([
     db.room.findMany({
       where: { isActive: true },
       select: { id: true, name: true, code: true, building: true, capacity: true },
@@ -51,6 +60,19 @@ export async function GET() {
       where: { isActive: true },
       select: { id: true, name: true, slug: true, color: true },
       orderBy: { sortOrder: "asc" },
+    }),
+    db.event.findMany({
+      where: { isActive: true, date: { gte: startOfToday } },
+      select: {
+        id: true,
+        name: true,
+        date: true,
+        endDate: true,
+        location: true,
+        programId: true,
+        program: { select: { id: true, name: true } },
+      },
+      orderBy: { date: "asc" },
     }),
     getActiveProgramsForDate(new Date()),
   ]);
@@ -78,6 +100,15 @@ export async function GET() {
       name: p.name,
       slug: p.slug,
       color: p.color,
+    })),
+    events: events.map((e) => ({
+      id: e.id,
+      name: e.name,
+      date: e.date.toISOString(),
+      endDate: e.endDate ? e.endDate.toISOString() : null,
+      location: e.location,
+      programId: e.programId,
+      programName: e.program?.name ?? null,
     })),
     todayActive,
   });

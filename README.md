@@ -73,7 +73,7 @@ The first-run wizard creates your organisation + first admin account + seeds the
 
 ## Configuration
 
-After setup, sign in at `/admin` → **Settings** (3 tabs):
+After setup, sign in at `/admin` → **Settings** (4 tabs):
 - **Branding & Terminology** — org name, colours, logo, terminology overrides, org-type profile
 - **Calendar & Codes** — week starts on (Sunday for SDA), daily code length + charset
 - **Feature Toggles** — 14 flags (kiosk lock, guardian PIN, photo verification, override checkout, etc.)

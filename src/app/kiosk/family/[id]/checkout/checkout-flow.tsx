@@ -577,7 +577,7 @@ export function CheckoutFlow({
                 </ul>
                 <p className="text-xs mt-2">
                   A <code>checkout.blocked</code> entry has been written to the
-                  audit log. Stage 9 will surface this to Security in real time.
+                  audit log and is visible to Security staff.
                 </p>
               </AlertDescription>
             </Alert>

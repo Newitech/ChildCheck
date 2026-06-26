@@ -13,7 +13,7 @@ persistent volumes for the database, uploaded photos, branding, and backups.
 ## 1. Get the source
 
 ```bash
-git clone https://github.com/Newitech/ChildCheck.git
+git clone https://github.com/childcheck/childcheck.git
 cd childcheck
 ```
 
@@ -116,31 +116,106 @@ docker inspect --format='{{.State.Health.Status}}' childcheck
 # → healthy
 ```
 
-## TLS reverse proxy
+## TLS termination with Caddy (opt-in)
 
 For browser-facing deployments, put Caddy or Nginx in front and let it handle
-TLS. The simplest option is Caddy (automatic Let's Encrypt certs).
+TLS. The bundled `docker-compose.yml` defines a `caddy` service under a
+**`tls` profile** so the default `docker compose up -d` stays HTTP-only — you
+opt in by adding `--profile tls`:
 
-### Caddy (recommended)
+```bash
+# Default — plain HTTP on port 3000 (no Caddy container starts):
+docker compose up -d
 
-Create `Caddyfile` next to your `docker-compose.yml`:
+# Opt-in HTTPS — auto-Let's-Encrypt for a real domain:
+DOMAIN=childcheck.myorg.org docker compose --profile tls up -d
+
+# Opt-in HTTPS — LAN-only, self-signed (no domain):
+cp docker/Caddyfile.lan docker/Caddyfile     # one-time swap of the default Caddyfile
+docker compose --profile tls up -d
+```
+
+### Domain mode (auto-Let's-Encrypt)
+
+The default `docker/Caddyfile` reads the `DOMAIN` env var:
 
 ```caddy
-checkin.mychurch.org {
-    reverse_proxy childcheck:3000
+# docker/Caddyfile (shipped with the repo)
+{$DOMAIN} {
+    reverse_proxy childcheck:{$PORT:3000}
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "geolocation=(), microphone=(), camera=()"
+    }
 }
 ```
 
-Uncomment the `caddy` service in `docker-compose.yml` (or copy from the
-commented block at the bottom). Make sure your DNS A/AAAA record for
-`checkin.mychurch.org` points at the host running Docker.
+Requirements for Let's Encrypt to succeed:
+
+1. A DNS A and/or AAAA record for `DOMAIN` pointing at the host running Docker.
+2. Ports 80 AND 443 open on the host (80 for the ACME HTTP-01 challenge; 443
+   is what clients connect to).
+3. The `DOMAIN` env var set to the EXACT hostname users will browse to (no
+   scheme, no path, no port).
+
+### LAN-only mode (self-signed via Caddy's internal CA)
+
+For trusted-LAN deployments where you don't have a real DNS name, swap in
+`docker/Caddyfile.lan` (also shipped with the repo):
+
+```bash
+cp docker/Caddyfile.lan docker/Caddyfile     # one-time swap
+docker compose --profile tls up -d           # DOMAIN env stays empty
+```
+
+```caddy
+# docker/Caddyfile.lan
+:443 {
+    tls internal
+    reverse_proxy childcheck:{$PORT:3000}
+    header { ... }
+}
+```
+
+The catch: browsers won't trust Caddy's internal CA until you import the root
+cert into each client's trust store. Inside the container, Caddy stores it at
+`/data/caddy/pki/authorities/local/root.crt`. Copy it out + trust it on each
+client:
+
+```bash
+docker cp caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt
+# Linux:   sudo cp caddy-root.crt /usr/local/share/ca-certificates/caddy-local-root.crt && sudo update-ca-certificates
+# macOS:   sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain caddy-root.crt
+# Windows: Import-Certificate -FilePath .\caddy-root.crt -CertStoreLocation Cert:\CurrentUser\Root
+```
+
+> 💡 **Smoother alternative:** use [mkcert](https://github.com/FiloSottile/mkcert)
+> instead of Caddy's internal CA — `mkcert -install` puts the local CA into
+> the OS + browser trust stores for you, then you point Caddy at the
+> generated cert (`tls /path/to/key.pem /path/to/cert.pem`).
+
+### After TLS is in place
+
+Update `NEXTAUTH_URL` in `.env` to the HTTPS URL so NextAuth marks its
+session cookies `Secure` (which only travel over TLS):
+
+```bash
+# .env
+NEXTAUTH_URL=https://checkin.mychurch.org
+```
 
 The realtime service (Socket.io) is served through the same port 3000 via the
 Next.js app's `/socket.io/` path. Caddy forwards it transparently — no special
 handling needed. (If you'd rather expose port 3003 directly, see the
 `XTransformPort` pattern in the README.)
 
-### Nginx
+### Manual Nginx (alternative to Caddy)
+
+If you'd rather use Nginx + certbot instead of Caddy, here's a working
+config:
 
 ```nginx
 server {

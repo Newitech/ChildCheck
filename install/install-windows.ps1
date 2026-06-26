@@ -14,18 +14,24 @@
 #   .\install\install-windows.ps1                              # download latest
 #   .\install\install-windows.ps1 -Source .\childcheck-win-x64.tar.gz
 #   .\install\install-windows.ps1 -Source .\childcheck-win-x64
+#   .\install\install-windows.ps1 -Tls                         # also install + configure Caddy for HTTPS
 #
 # Parameters:
 #   -Source       Path to a local tarball or unpacked directory.
 #   -Version      Release version to download (default: latest).
 #   -InstallDir   Override the install directory (default: C:\Program Files\ChildCheck).
+#   -Tls          Opt-in TLS termination via Caddy. Downloads Caddy for Windows
+#                 into the install dir, generates a Caddyfile, and registers a
+#                 second WinSW service (ChildCheck-Caddy). Prompts for a domain
+#                 name (blank for LAN-only self-signed via Caddy's internal CA).
 # =============================================================================
 [CmdletBinding()]
 param(
     [string]$Source = "",
     [string]$Version = "latest",
     [string]$InstallDir = "C:\Program Files\ChildCheck",
-    [string]$UrlBase = "https://github.com/childcheck/childcheck/releases/download"
+    [string]$UrlBase = "https://github.com/childcheck/childcheck/releases/download",
+    [switch]$Tls
 )
 
 $ErrorActionPreference = "Stop"
@@ -51,6 +57,52 @@ function Write-Info($msg)  { Write-Host "[info]  $msg" -ForegroundColor Green }
 function Write-Warn($msg)  { Write-Host "[warn]  $msg" -ForegroundColor Yellow }
 function Write-Err($msg)   { Write-Host "[error] $msg" -ForegroundColor Red }
 function Write-Step($msg)  { Write-Host ""; Write-Host "==> $msg" -ForegroundColor Cyan }
+
+# --- Port helpers ------------------------------------------------------------
+# Test-PortFree(port) → $true if nothing is listening on the port.
+function Test-PortFree([int]$Port) {
+    try {
+        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
+        $listener.Start()
+        $listener.Stop()
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+# Read-Port($Default, $Label) → the chosen port number.
+# If $Default is in use, prompts for an alternative + validates (numeric + free).
+function Read-Port([int]$Default, [string]$Label) {
+    $port = $Default
+    if (-not (Test-PortFree $Default)) {
+        Write-Warn "port $Default is already in use ($Label)."
+        # Suggest next port up.
+        $suggest = $Default + 1
+        while (-not (Test-PortFree $suggest)) { $suggest++ }
+        $alt = Read-Host "Use an alternative port for $Label? [$suggest]"
+        if (-not $alt) { $port = $suggest } else { $port = [int]$alt }
+        while ($port -lt 1 -or $port -gt 65535) {
+            Write-Err "'$port' is not a valid port (must be 1-65535)."
+            $alt = Read-Host "$Label port [$suggest]"
+            if (-not $alt) { $port = $suggest } else { $port = [int]$alt }
+        }
+        while (-not (Test-PortFree $port)) {
+            Write-Err "port $port is also in use."
+            $alt = Read-Host "$Label port [$suggest]"
+            if (-not $alt) { $port = $suggest } else { $port = [int]$alt }
+            while ($port -lt 1 -or $port -gt 65535) {
+                Write-Err "'$port' is not a valid port (must be 1-65535)."
+                $alt = Read-Host "$Label port [$suggest]"
+                if (-not $alt) { $port = $suggest } else { $port = [int]$alt }
+            }
+        }
+        if ($port -ne $Default) {
+            Write-Info "using $Label port $port (default $Default was in use)."
+        }
+    }
+    return $port
+}
 
 # --- 0. Locate the binary ----------------------------------------------------
 $workDir = Join-Path $env:TEMP "childcheck-install-$(Get-Random)"
@@ -141,14 +193,24 @@ try {
     $envFile = "$dataDir\config\.env"
     if (Test-Path $envFile) {
         Write-Info ".env already exists at $envFile — leaving as-is."
+        # Pull existing PORT/REALTIME_PORT for the health-check + summary.
+        $existingPort = (Get-Content $envFile | Where-Object { $_ -match "^PORT=" }) -replace "PORT=", ""
+        $existingRt   = (Get-Content $envFile | Where-Object { $_ -match "^REALTIME_PORT=" }) -replace "REALTIME_PORT=", ""
+        $port        = if ($existingPort) { [int]$existingPort.Trim() } else { 3000 }
+        $realtimePort = if ($existingRt)   { [int]$existingRt.Trim() }   else { 3003 }
     } else {
-        $defaultUrl = "http://localhost:3000"
+        # Prompt for ports if defaults are in use.
+        Write-Step "Choosing ports (default: web 3000, realtime 3003)"
+        $port = Read-Port 3000 "web server"
+        $realtimePort = Read-Port 3003 "realtime (Socket.io)"
+
+        $defaultUrl = "http://localhost:$port"
         # Try to detect the machine's LAN IP.
         try {
             $ip = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
                    Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" } |
                    Select-Object -First 1).IPAddress
-            if ($ip) { $defaultUrl = "http://$ip`:3000" }
+            if ($ip) { $defaultUrl = "http://$ip`:$port" }
         } catch {}
 
         $nextauthUrl = Read-Host "Public URL [$defaultUrl]"
@@ -178,14 +240,15 @@ CHILDCHECK_DATA_KEY=$dataKey
 DATABASE_URL=file:$dataDir\db\custom.db
 CHILDCHECK_DATA_DIR=$dataDir\data
 CHILDCHECK_CONFIG_DIR=$dataDir\config
-REALTIME_PORT=3003
-PORT=3000
+REALTIME_PORT=$realtimePort
+PORT=$port
 HOSTNAME=0.0.0.0
 "@
         # Use forward slashes in DATABASE_URL so Prisma's SQLite parser is happy.
         $envContent = $envContent -replace "\\", "/"
         Set-Content -Path $envFile -Value $envContent -Encoding ASCII
         Write-Info ".env written to $envFile."
+        Write-Info "  PORT=$port  REALTIME_PORT=$realtimePort"
     }
 
     # --- 4. Download WinSW ---------------------------------------------------
@@ -245,7 +308,7 @@ HOSTNAME=0.0.0.0
     $ok = $false
     for ($i = 1; $i -le 30; $i++) {
         try {
-            $resp = Invoke-WebRequest -Uri "http://localhost:3000/api/config" -UseBasicParsing -TimeoutSec 3
+            $resp = Invoke-WebRequest -Uri "http://localhost:$port/api/config" -UseBasicParsing -TimeoutSec 3
             if ($resp.StatusCode -eq 200) { $ok = $true; break }
         } catch {}
         Start-Sleep -Seconds 1
@@ -255,6 +318,172 @@ HOSTNAME=0.0.0.0
         Write-Warn "check logs at: $dataDir\logs"
     } else {
         Write-Info "service is up."
+    }
+
+    # --- 6a. Opt-in TLS via Caddy (-Tls switch) ------------------------------
+    $caddyServiceName = "ChildCheck-Caddy"
+    $caddyExe = Join-Path $InstallDir "caddy.exe"
+    $caddyfile = Join-Path $dataDir "config\Caddyfile"
+    $caddyWinswExe = Join-Path $InstallDir "caddy-service.exe"
+    $caddyWinswXml = Join-Path $InstallDir "caddy-service.xml"
+    if ($Tls) {
+        Write-Step "Configuring TLS via Caddy (-Tls)"
+
+        # Download Caddy for Windows (single static binary).
+        if (-not (Test-Path $caddyExe)) {
+            Write-Info "downloading Caddy for Windows..."
+            # The official Caddy releases publish caddy_<ver>_windows_amd64.zip.
+            # We download from the GitHub releases — the latest stable tag.
+            $caddyLatestUrl = "https://caddyserver.com/api/download?os=windows&arch=amd64"
+            $caddyZip = Join-Path $workDir "caddy.zip"
+            try {
+                Invoke-WebRequest -Uri $caddyLatestUrl -OutFile $caddyZip -UseBasicParsing
+                Expand-Archive -Path $caddyZip -DestinationPath $InstallDir -Force
+                # The zip extracts `caddy.exe` directly into the destination.
+                if (-not (Test-Path $caddyExe)) {
+                    # Look one level deeper in case it landed in a subfolder.
+                    $found = Get-ChildItem -Path $InstallDir -Recurse -Filter "caddy.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+                    if ($found) { Move-Item $found.FullName $caddyExe -Force }
+                }
+            } catch {
+                Write-Err "failed to download Caddy: $($_.Exception.Message)"
+                Write-Err "download manually from https://caddyserver.com/download and place caddy.exe at $caddyExe"
+            }
+        } else {
+            Write-Info "Caddy already present at $caddyExe."
+        }
+
+        if (Test-Path $caddyExe) {
+            # Prompt for the domain (blank = LAN-only self-signed).
+            Write-Host ""
+            Write-Host "  Domain name (blank for LAN-only self-signed):"
+            Write-Host "    - For a real domain (e.g. checkin.mychurch.org): Caddy auto-provisions"
+            Write-Host "      + auto-renews a Let's Encrypt cert. Ports 80 + 443 must be open."
+            Write-Host "    - Blank: Caddy uses its built-in internal CA (self-signed). Import"
+            Write-Host "      Caddy's root cert into each client's trust store — see"
+            Write-Host "      install/Caddyfile.lan for the per-OS commands."
+            $tlsDomain = Read-Host "  Domain [blank for LAN-only]"
+            $tlsDomain = $tlsDomain.Trim()
+
+            # Locate the Caddyfile templates shipped alongside this script.
+            $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+            if (-not $scriptDir) { $scriptDir = (Get-Location).Path }
+            $domainTemplate = Join-Path $scriptDir "Caddyfile.domain"
+            $lanTemplate = Join-Path $scriptDir "Caddyfile.lan"
+
+            # Generate the Caddyfile.
+            $caddyConfigDir = Split-Path -Parent $caddyfile
+            New-Item -ItemType Directory -Path $caddyConfigDir -Force | Out-Null
+
+            if ($tlsDomain) {
+                Write-Info "using DOMAIN mode (auto-Let's-Encrypt for $tlsDomain)."
+                if (Test-Path $domainTemplate) {
+                    $content = Get-Content $domainTemplate -Raw
+                    $content = $content -replace '\{\$DOMAIN\}', $tlsDomain
+                    $content = $content -replace '\{\$PORT:3000\}', $port
+                    Set-Content -Path $caddyfile -Value $content -Encoding ASCII
+                } else {
+                    $caddyContent = @"
+$tlsDomain {
+    reverse_proxy localhost:$port
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "geolocation=(), microphone=(), camera=()"
+    }
+}
+"@
+                    Set-Content -Path $caddyfile -Value $caddyContent -Encoding ASCII
+                }
+                $tlsPublicHost = $tlsDomain
+            } else {
+                Write-Info "using LAN-only mode (Caddy internal CA — self-signed)."
+                if (Test-Path $lanTemplate) {
+                    $content = Get-Content $lanTemplate -Raw
+                    $content = $content -replace '\{\$PORT:3000\}', $port
+                    Set-Content -Path $caddyfile -Value $content -Encoding ASCII
+                } else {
+                    $caddyContent = @"
+:443 {
+    tls internal
+    reverse_proxy localhost:$port
+}
+"@
+                    Set-Content -Path $caddyfile -Value $caddyContent -Encoding ASCII
+                }
+                # Use the LAN IP for NEXTAUTH_URL.
+                try {
+                    $ip = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                           Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" } |
+                           Select-Object -First 1).IPAddress
+                    if ($ip) { $tlsPublicHost = $ip } else { $tlsPublicHost = "localhost" }
+                } catch { $tlsPublicHost = "localhost" }
+            }
+            Write-Info "Caddyfile written to $caddyfile."
+
+            # Open ports 80 + 443 in Windows Firewall (best-effort).
+            try {
+                New-NetFirewallRule -DisplayName "ChildCheck Caddy HTTP (80)" -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow -ErrorAction SilentlyContinue | Out-Null
+                New-NetFirewallRule -DisplayName "ChildCheck Caddy HTTPS (443)" -Direction Inbound -LocalPort 443 -Protocol TCP -Action Allow -ErrorAction SilentlyContinue | Out-Null
+                Write-Info "Windows Firewall: allowed 80/tcp + 443/tcp."
+            } catch {
+                Write-Warn "could not open firewall ports (continue manually if needed)."
+            }
+
+            # Copy the WinSW binary under a different name for the Caddy service.
+            if (Test-Path $winswExe) {
+                Copy-Item $winswExe $caddyWinswExe -Force
+            } else {
+                Invoke-WebRequest -Uri $winswUrl -OutFile $caddyWinswExe -UseBasicParsing
+            }
+
+            # Write the Caddy WinSW XML config.
+            $caddyXmlContent = @"
+<service>
+  <id>$caddyServiceName</id>
+  <name>ChildCheck Caddy — TLS reverse proxy</name>
+  <description>Runs Caddy to terminate HTTPS in front of ChildCheck.</description>
+  <executable>$caddyExe</executable>
+  <arguments>run --config $caddyfile</arguments>
+  <workingdirectory>$dataDir\config</workingdirectory>
+  <logpath>$dataDir\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+  <startmode>Automatic</startmode>
+  <onfailure action="restart" delay="10 sec" />
+  <onfailure action="restart" delay="20 sec" />
+  <onfailure action="restart" delay="30 sec" />
+</service>
+"@
+            Set-Content -Path $caddyWinswXml -Value $caddyXmlContent -Encoding ASCII
+            Write-Info "Caddy WinSW config written to $caddyWinswXml."
+
+            # Register + start the Caddy service.
+            & $caddyWinswExe uninstall 2>$null | Out-Null
+            & $caddyWinswExe install
+            & $caddyWinswExe start
+            Write-Info "Caddy service installed + started."
+
+            # Rewrite NEXTAUTH_URL to HTTPS so cookies are marked Secure.
+            $httpsUrl = "https://$tlsPublicHost"
+            if (Test-Path $envFile) {
+                $envContent = Get-Content $envFile
+                $envContent = $envContent | ForEach-Object {
+                    if ($_ -match "^NEXTAUTH_URL=") { "NEXTAUTH_URL=$httpsUrl" } else { $_ }
+                }
+                Set-Content -Path $envFile -Value $envContent -Encoding ASCII
+                Write-Info "NEXTAUTH_URL updated to $httpsUrl in $envFile."
+                # Restart the ChildCheck service so it picks up the new URL.
+                Restart-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+            }
+        } else {
+            Write-Warn "Caddy binary not found at $caddyExe — skipping Caddy setup."
+            Write-Warn "Download manually from https://caddyserver.com/download and re-run with -Tls."
+        }
     }
 
     # --- 7. Summary ----------------------------------------------------------
@@ -278,6 +507,20 @@ HOSTNAME=0.0.0.0
     Write-Host " Public URL:   $publicUrl"
     Write-Host " Setup wizard: $publicUrl/setup"
     Write-Host ""
+    if ($Tls -and (Test-Path $caddyfile)) {
+        Write-Host " TLS:          Caddy reverse proxy (ports 80 + 443)"
+        Write-Host "               Caddyfile:  $caddyfile"
+        Write-Host "               Service:    Get-Service $caddyServiceName"
+        Write-Host "               Logs:       $dataDir\logs\*.log"
+        if ($tlsDomain) {
+            Write-Host "               Cert:       auto-Let's-Encrypt for $tlsDomain"
+        } else {
+            Write-Host "               Cert:       Caddy internal CA (self-signed)."
+            Write-Host "                           Import the root cert on each client:"
+            Write-Host "                           C:\ProgramData\Caddy\pki\authorities\local\root.crt"
+        }
+        Write-Host ""
+    }
     Write-Host " Next step:"
     Write-Host "   1. Open the Setup URL above in a browser."
     Write-Host "   2. Fill in your organisation name + first admin user."

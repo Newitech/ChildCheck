@@ -25,6 +25,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { useTerminology } from "@/hooks/use-terminology";
+import { formatFullName } from "@/lib/people";
 import {
   Tooltip,
   TooltipContent,
@@ -44,6 +45,7 @@ export interface KioskSessionSummary {
 export interface KioskFamilyMember {
   id: string;
   firstName: string;
+  middleName: string | null;
   lastName: string;
 }
 
@@ -192,7 +194,12 @@ export function FamilyDetail({ initial }: { initial: KioskFamilyDetailDTO }) {
               </Card>
             )}
             {initial.primaryCarers.map((c) => (
-              <MemberRow key={c.id} firstName={c.firstName} lastName={c.lastName} />
+              <MemberRow
+                key={c.id}
+                firstName={c.firstName}
+                middleName={c.middleName}
+                lastName={c.lastName}
+              />
             ))}
           </div>
         </section>
@@ -222,7 +229,7 @@ export function FamilyDetail({ initial }: { initial: KioskFamilyDetailDTO }) {
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="font-medium truncate">
-                    {c.firstName} {c.lastName}
+                    {formatFullName(c)}
                   </p>
                   <p className="text-xs text-muted-foreground">
                     {c.ageYears !== null ? `${c.ageYears} yrs` : "Age unknown"}
@@ -256,13 +263,18 @@ export function FamilyDetail({ initial }: { initial: KioskFamilyDetailDTO }) {
             </h2>
             <div className="grid sm:grid-cols-2 gap-2">
               {initial.guardians.map((g) => (
-                <MemberRow key={g.id} firstName={g.firstName} lastName={g.lastName} />
+                <MemberRow
+                  key={g.id}
+                  firstName={g.firstName}
+                  middleName={g.middleName}
+                  lastName={g.lastName}
+                />
               ))}
             </div>
           </section>
         )}
 
-        {/* Check-in / Check-out CTAs (Stage 7/8 stubs) */}
+        {/* Check-in / Check-out CTAs */}
         <div className="grid sm:grid-cols-2 gap-3 pt-2">
           <TooltipProvider delayDuration={200}>
             <Tooltip>
@@ -315,7 +327,16 @@ export function FamilyDetail({ initial }: { initial: KioskFamilyDetailDTO }) {
   );
 }
 
-function MemberRow({ firstName, lastName }: { firstName: string; lastName: string }) {
+function MemberRow({
+  firstName,
+  middleName,
+  lastName,
+}: {
+  firstName: string;
+  middleName: string | null;
+  lastName: string;
+}) {
+  const fullName = formatFullName({ firstName, middleName, lastName });
   const initials = `${(firstName[0] ?? "").toUpperCase()}${(lastName[0] ?? "").toUpperCase()}`;
   return (
     <div className="rounded-xl border bg-card p-3 flex items-center gap-3">
@@ -325,9 +346,7 @@ function MemberRow({ firstName, lastName }: { firstName: string; lastName: strin
       >
         {initials || "?"}
       </span>
-      <p className="font-medium truncate">
-        {firstName} {lastName}
-      </p>
+      <p className="font-medium truncate">{fullName}</p>
     </div>
   );
 }

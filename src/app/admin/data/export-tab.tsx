@@ -185,7 +185,7 @@ export function ExportTab() {
           <CardDescription className="text-sm leading-relaxed">
             All exports are RFC-4180 CSV files with a header row and properly
             quoted fields. The export runs against your current database; if you
-            need an offline backup, also use the backup feature (Stage 13).
+            need an offline backup, use the Backup &amp; Restore feature.
             Exports are audited. Admin / PeopleManager / Security can download.
           </CardDescription>
         </CardHeader>

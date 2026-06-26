@@ -219,6 +219,7 @@ export async function POST(req: Request) {
       roomId: rec.roomId,
       classId: rec.classId,
       programId: rec.checkInSession.programId,
+      eventId: rec.checkInSession.eventId,
       checkInSessionId: rec.checkInSession.id,
     })) {
       allRooms.add(r);

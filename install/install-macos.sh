@@ -16,8 +16,33 @@
 #   bash install/install-macos.sh                       # download latest release
 #   bash install/install-macos.sh /path/to/tarball      # use local tarball
 #   bash install/install-macos.sh /path/to/dir          # use unpacked dir
+#   bash install/install-macos.sh --tls                 # also install + configure Caddy for HTTPS
+#
+# Flags:
+#   --tls          Opt-in TLS termination via Caddy. `brew install caddy`,
+#                  generates a Caddyfile into
+#                  /opt/homebrew/etc/caddy/Caddyfile (Apple Silicon) or
+#                  /usr/local/etc/caddy/Caddyfile (Intel), and starts Caddy
+#                  via a second launchd plist (org.childcheck.caddy.plist)
+#                  alongside ChildCheck. Prompts for a domain name (blank for
+#                  LAN-only self-signed via Caddy's internal CA).
 # =============================================================================
 set -euo pipefail
+
+# Parse `--tls` flag (anywhere in argv).
+TLS_ENABLED=0
+NEW_ARGS=()
+for arg in "$@"; do
+  case "${arg}" in
+    --tls) TLS_ENABLED=1 ;;
+    --help|-h)
+      sed -n '2,30p' "$0"
+      exit 0
+      ;;
+    *) NEW_ARGS+=("${arg}") ;;
+  esac
+done
+set -- "${NEW_ARGS[@]+"${NEW_ARGS[@]}"}"
 
 # Refuse to run as root — launchd user agents don't work for root well.
 if [ "$(id -u)" -eq 0 ]; then
@@ -57,6 +82,53 @@ info()  { echo "${GREEN}[info]${NC}  $*"; }
 warn()  { echo "${YELLOW}[warn]${NC}  $*"; }
 err()   { echo "${RED}[error]${NC} $*" >&2; }
 step()  { echo ""; echo "${CYAN}==>${NC} $*"; }
+
+# ----------------------------------------------------------------------------
+# Port helpers (macOS — uses lsof which is always present on macOS)
+# ----------------------------------------------------------------------------
+port_in_use() {
+  local port="$1"
+  # macOS ships lsof by default — it's the most reliable here.
+  if lsof -nP -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
+# prompt_port(default, label) → echoes the chosen port number.
+prompt_port() {
+  local default="$1" label="$2"
+  local port="${default}"
+
+  if port_in_use "${default}"; then
+    warn "port ${default} is already in use (${label})."
+    local suggest=$(( default + 1 ))
+    while port_in_use "${suggest}"; do
+      suggest=$(( suggest + 1 ))
+    done
+    read -r -p "Use an alternative port for ${label}? [${suggest}]: " alt </dev/tty
+    port="${alt:-${suggest}}"
+    while ! [[ "${port}" =~ ^[0-9]+$ ]] || [ "${port}" -lt 1 ] || [ "${port}" -gt 65535 ]; do
+      err "'${port}' is not a valid port (must be 1-65535)."
+      read -r -p "${label} port [${suggest}]: " alt </dev/tty
+      port="${alt:-${suggest}}"
+    done
+    while port_in_use "${port}"; do
+      err "port ${port} is also in use."
+      read -r -p "${label} port [${suggest}]: " alt </dev/tty
+      port="${alt:-${suggest}}"
+      while ! [[ "${port}" =~ ^[0-9]+$ ]] || [ "${port}" -lt 1 ] || [ "${port}" -gt 65535 ]; do
+        err "'${port}' is not a valid port (must be 1-65535)."
+        read -r -p "${label} port [${suggest}]: " alt </dev/tty
+        port="${alt:-${suggest}}"
+      done
+    done
+    if [ "${port}" != "${default}" ]; then
+      info "using ${label} port ${port} (default ${default} was in use)."
+    fi
+  fi
+  echo "${port}"
+}
 
 # ----------------------------------------------------------------------------
 # 0. Parse args / locate the binary
@@ -162,13 +234,21 @@ step "Configuring environment"
 ENV_FILE="${DATA_DIR}/config/.env"
 if [ -f "${ENV_FILE}" ]; then
   info ".env already exists at ${ENV_FILE} — leaving as-is."
+  PORT="$(grep -E '^PORT=' "${ENV_FILE}" | cut -d= -f2- || true)"
+  PORT="${PORT:-3000}"
+  REALTIME_PORT="$(grep -E '^REALTIME_PORT=' "${ENV_FILE}" | cut -d= -f2- || true)"
+  REALTIME_PORT="${REALTIME_PORT:-3003}"
 else
-  DEFAULT_URL="http://localhost:3000"
+  step "Choosing ports (default: web 3000, realtime 3003)"
+  PORT="$(prompt_port 3000 "web server")"
+  REALTIME_PORT="$(prompt_port 3003 "realtime (Socket.io)")"
+
+  DEFAULT_URL="http://localhost:${PORT}"
   # Try to detect the .local hostname (Bonjour).
   if command -v scutil >/dev/null 2>&1; then
     LOCAL_HOST="$(scutil --get LocalHostName 2>/dev/null || true)"
     if [ -n "${LOCAL_HOST}" ]; then
-      DEFAULT_URL="http://${LOCAL_HOST}.local:3000"
+      DEFAULT_URL="http://${LOCAL_HOST}.local:${PORT}"
     fi
   fi
 
@@ -195,12 +275,13 @@ CHILDCHECK_DATA_KEY=${CHILDCHECK_DATA_KEY}
 DATABASE_URL=file:${DATA_DIR}/db/custom.db
 CHILDCHECK_DATA_DIR=${DATA_DIR}/data
 CHILDCHECK_CONFIG_DIR=${DATA_DIR}/config
-REALTIME_PORT=3003
-PORT=3000
+REALTIME_PORT=${REALTIME_PORT}
+PORT=${PORT}
 HOSTNAME=0.0.0.0
 EOF
   chmod 600 "${ENV_FILE}"
   info ".env written to ${ENV_FILE} (chmod 600)."
+  info "  PORT=${PORT}  REALTIME_PORT=${REALTIME_PORT}"
 fi
 
 # ----------------------------------------------------------------------------
@@ -283,7 +364,7 @@ info "agent loaded."
 step "Waiting for service to come up"
 OK=0
 for i in $(seq 1 30); do
-  if curl -fsS "http://localhost:3000/api/config" >/dev/null 2>&1; then
+  if curl -fsS "http://localhost:${PORT}/api/config" >/dev/null 2>&1; then
     OK=1
     break
   fi
@@ -294,6 +375,163 @@ if [ "${OK}" -ne 1 ]; then
   warn "  tail -f '${LOG_DIR}/childcheck.stderr.log'"
 else
   info "service is up."
+fi
+
+# ----------------------------------------------------------------------------
+# 5a. Opt-in TLS via Caddy (--tls flag)
+# ----------------------------------------------------------------------------
+# Install Caddy via Homebrew, generate a Caddyfile, and run Caddy via a
+# second launchd plist (org.childcheck.caddy.plist) alongside ChildCheck.
+CADDY_PLIST_PATH="${HOME}/Library/LaunchAgents/org.childcheck.caddy.plist"
+CADDYFILE_PATH=""
+if [ "${TLS_ENABLED}" -eq 1 ]; then
+  step "Configuring TLS via Caddy (--tls)"
+
+  # Locate the Caddy config dir (Homebrew path differs by arch).
+  if [ -d "/opt/homebrew" ]; then
+    CADDYFILE_PATH="/opt/homebrew/etc/caddy/Caddyfile"
+    CADDY_BIN="/opt/homebrew/bin/caddy"
+    CADDY_DATA_DIR="${HOME}/Library/Application Support/Caddy"
+  else
+    CADDYFILE_PATH="/usr/local/etc/caddy/Caddyfile"
+    CADDY_BIN="/usr/local/bin/caddy"
+    CADDY_DATA_DIR="${HOME}/Library/Application Support/Caddy"
+  fi
+
+  # Install Caddy via Homebrew.
+  if ! command -v caddy >/dev/null 2>&1; then
+    if ! command -v brew >/dev/null 2>&1; then
+      err "Homebrew is required to install Caddy. Install from https://brew.sh and re-run."
+      exit 1
+    fi
+    info "installing Caddy via Homebrew."
+    brew install caddy
+  else
+    info "Caddy already installed — skipping brew install."
+    CADDY_BIN="$(command -v caddy)"
+  fi
+
+  # Prompt for the domain name (blank = LAN-only self-signed).
+  echo ""
+  echo "  Domain name (blank for LAN-only self-signed):"
+  echo "    - For a real domain (e.g. checkin.mychurch.org): Caddy auto-provisions"
+  echo "      + auto-renews a Let's Encrypt cert. Ports 80 + 443 must be open."
+  echo "    - Blank: Caddy uses its built-in internal CA (self-signed). Import"
+  echo "      Caddy's root cert into each client's trust store — see"
+  echo "      install/Caddyfile.lan for the per-OS commands."
+  read -r -p "  Domain [blank for LAN-only]: " TLS_DOMAIN </dev/tty
+  TLS_DOMAIN="${TLS_DOMAIN:-}"
+
+  # Locate the Caddyfile templates shipped alongside this script.
+  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+  DOMAIN_TEMPLATE="${SCRIPT_DIR}/Caddyfile.domain"
+  LAN_TEMPLATE="${SCRIPT_DIR}/Caddyfile.lan"
+
+  # Generate the Caddyfile from the appropriate template.
+  mkdir -p "$(dirname "${CADDYFILE_PATH}")"
+  if [ -n "${TLS_DOMAIN}" ]; then
+    info "using DOMAIN mode (auto-Let's-Encrypt for ${TLS_DOMAIN})."
+    if [ -f "${DOMAIN_TEMPLATE}" ]; then
+      sed "s|{\$DOMAIN}|${TLS_DOMAIN}|g; s|{\$PORT:3000}|${PORT}|g" "${DOMAIN_TEMPLATE}" > "${CADDYFILE_PATH}"
+    else
+      cat > "${CADDYFILE_PATH}" <<EOF
+${TLS_DOMAIN} {
+        reverse_proxy localhost:${PORT}
+}
+EOF
+    fi
+    TLS_PUBLIC_HOST="${TLS_DOMAIN}"
+  else
+    info "using LAN-only mode (Caddy internal CA — self-signed)."
+    if [ -f "${LAN_TEMPLATE}" ]; then
+      sed "s|{\$PORT:3000}|${PORT}|g" "${LAN_TEMPLATE}" > "${CADDYFILE_PATH}"
+    else
+      cat > "${CADDYFILE_PATH}" <<EOF
+:443 {
+        tls internal
+        reverse_proxy localhost:${PORT}
+}
+EOF
+    fi
+    # Use the .local hostname for NEXTAUTH_URL.
+    TLS_PUBLIC_HOST="$(scutil --get LocalHostName 2>/dev/null || echo localhost).local"
+  fi
+  chmod 644 "${CADDYFILE_PATH}"
+  info "Caddyfile written to ${CADDYFILE_PATH}."
+
+  # Run Caddy via a second launchd plist.
+  mkdir -p "$(dirname "${CADDY_PLIST_PATH}")"
+  mkdir -p "${CADDY_DATA_DIR}/logs"
+  cat > "${CADDY_PLIST_PATH}" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>org.childcheck.caddy</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>${CADDY_BIN}</string>
+    <string>run</string>
+    <string>--config</string>
+    <string>${CADDYFILE_PATH}</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>$(dirname "${CADDYFILE_PATH}")</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>${CADDY_DATA_DIR}/logs/caddy.stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>${CADDY_DATA_DIR}/logs/caddy.stderr.log</string>
+
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+</dict>
+</plist>
+EOF
+  chmod 644 "${CADDY_PLIST_PATH}"
+
+  # Caddy needs to bind ports 80 + 443, which on macOS requires either:
+  #   (a) running Caddy as root via sudo (NOT recommended — we run as user), OR
+  #   (b) granting Caddy the privilege to bind privileged ports via:
+  #         sudo /usr/sbin/screencapture setcap... (not available on macOS), OR
+  #   (c) running Caddy on higher ports (e.g. 8443) — requires a redirect rule.
+  # The standard macOS approach is to launch Caddy with sudo. We DON'T do that
+  # here (to keep the user-level launchd pattern). Instead we warn the user:
+  if [ "${PORT}" = "3000" ]; then
+    warn "macOS note: binding ports 80 + 443 requires root. Caddy will fail to start"
+    warn "the launchd agent as your user. Either:"
+    warn "  (a) Edit ${CADDYFILE_PATH} to listen on :8443 instead of :443, then browse to"
+    warn "      https://${TLS_PUBLIC_HOST}:8443 — no root needed."
+    warn "  (b) Run Caddy as root: sudo launchctl bootstrap system/${CADDY_PLIST_PATH}"
+    warn "      after moving it to /Library/LaunchDaemons/org.childcheck.caddy.plist"
+    warn "      (system-level Daemons run as root and can bind 80 + 443)."
+  fi
+
+  # Load the Caddy launchd agent (best-effort — may fail on privileged ports).
+  launchctl unload "${CADDY_PLIST_PATH}" 2>/dev/null || true
+  launchctl load "${CADDY_PLIST_PATH}" 2>/dev/null || warn "Caddy agent failed to load — see the note above."
+
+  # Rewrite NEXTAUTH_URL to HTTPS.
+  HTTPS_URL="https://${TLS_PUBLIC_HOST}"
+  if [ -f "${ENV_FILE}" ]; then
+    sed -i '' "s|^NEXTAUTH_URL=.*|NEXTAUTH_URL=${HTTPS_URL}|" "${ENV_FILE}"
+    info "NEXTAUTH_URL updated to ${HTTPS_URL} in ${ENV_FILE}."
+    launchctl unload "${PLIST_PATH}" 2>/dev/null || true
+    launchctl load "${PLIST_PATH}"
+  fi
 fi
 
 # ----------------------------------------------------------------------------
@@ -321,6 +559,20 @@ echo ""
 echo " Public URL:   ${PUBLIC_URL}"
 echo " Setup wizard: ${PUBLIC_URL}/setup"
 echo ""
+if [ "${TLS_ENABLED}" -eq 1 ] && [ -n "${CADDYFILE_PATH}" ]; then
+  echo " TLS:          Caddy reverse proxy (ports 80 + 443)"
+  echo "               Caddyfile:  ${CADDYFILE_PATH}"
+  echo "               Plist:      ${CADDY_PLIST_PATH}"
+  echo "               Logs:       tail -f '${HOME}/Library/Application Support/Caddy/logs/caddy.stderr.log'"
+  if [ -n "${TLS_DOMAIN:-}" ]; then
+    echo "               Cert:       auto-Let's-Encrypt for ${TLS_DOMAIN}"
+  else
+    echo "               Cert:       Caddy internal CA (self-signed)."
+    echo "                           Import the root cert on each client:"
+    echo "                           ~/Library/Application Support/Caddy/pki/authorities/local/root.crt"
+  fi
+  echo ""
+fi
 echo " Next step:"
 echo "   1. Open the Setup URL above in a browser."
 echo "   2. Fill in your organisation name + first admin user."

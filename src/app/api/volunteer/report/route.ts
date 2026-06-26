@@ -7,21 +7,26 @@ import { startOfDayUTC } from "@/lib/daily-code";
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/volunteer/report?programId=&classId=&roomId=&dateFrom=&dateTo=&format=
+ * GET /api/volunteer/report?programId=&classId=&roomId=&eventId=&dateFrom=&dateTo=&format=
  *
  * Attendance report for a scope + date range.
  *
  * Access: Teacher / Volunteer / Security / Admin (run_reports permission).
  *
  * Query params:
- *   - programId, classId, roomId (optional filters — any combination)
+ *   - programId, classId, roomId, eventId (optional filters — any combination)
  *   - dateFrom (yyyy-mm-dd, defaults to today)
  *   - dateTo (yyyy-mm-dd, defaults to dateFrom)
  *   - format: "json" (default) | "csv"
  *
+ * If NO scope filter (programId/classId/roomId/eventId) is provided, returns
+ * ALL check-in records for the date range (the volunteer dashboard's "All"
+ * scope). Allowed for Admin / Security / Teacher / Volunteer — teacher-class
+ * scoping arrives in a later stage (see worklog Q3).
+ *
  * JSON returns:
  *   {
- *     scope: { programId, classId, roomId, dateFrom, dateTo },
+ *     scope: { programId, classId, roomId, eventId, dateFrom, dateTo },
  *     summary: { totalCheckIns, uniqueChildren, stillInCare, checkedOut, withAlerts },
  *     items: [{ checkInRecordId, child, family, program, class, room,
  *              checkedInAt, checkedOutAt, durationMinutes, method,
@@ -61,6 +66,7 @@ export async function GET(req: Request) {
   const programId = url.searchParams.get("programId")?.trim() || null;
   const classId = url.searchParams.get("classId")?.trim() || null;
   const roomId = url.searchParams.get("roomId")?.trim() || null;
+  const eventId = url.searchParams.get("eventId")?.trim() || null;
   const format = url.searchParams.get("format")?.trim() || "json";
 
   const today = new Date();
@@ -70,14 +76,19 @@ export async function GET(req: Request) {
   const dateTo = startOfDayUTC(dateToRaw);
   dateTo.setUTCDate(dateTo.getUTCDate() + 1);
 
-  // Build the WHERE clause.
+  // Build the WHERE clause. If NO scope filter is provided, return ALL
+  // check-in records for the date range (the volunteer dashboard's "All"
+  // scope).
   const where: Record<string, unknown> = {
     checkedInAt: { gte: dateFrom, lt: dateTo },
   };
   if (roomId) where.roomId = roomId;
   if (classId) where.classId = classId;
-  if (programId) {
-    where.checkInSession = { programId };
+  if (programId || eventId) {
+    const sessionWhere: Record<string, unknown> = {};
+    if (programId) sessionWhere.programId = programId;
+    if (eventId) sessionWhere.eventId = eventId;
+    where.checkInSession = sessionWhere;
   }
 
   const records = await db.checkInRecord.findMany({
@@ -218,6 +229,7 @@ export async function GET(req: Request) {
     programId,
     classId,
     roomId,
+    eventId,
     dateFrom: dateFrom.toISOString(),
     dateTo: startOfDayUTC(dateToRaw).toISOString(),
   };

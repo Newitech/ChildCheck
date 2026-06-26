@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 
 import { getCurrentUser } from "@/lib/auth";
 import { getFeatureFlags } from "@/lib/feature-flags";
+import { startOfDayUTC } from "@/lib/daily-code";
 import { db } from "@/lib/db";
 import { VolunteerDashboard } from "./volunteer-dashboard";
 
@@ -22,7 +23,8 @@ export default async function VolunteerHomePage() {
   // Load initial dropdown options server-side (avoids a loading flash on the
   // client). The client refetches nothing here — only the roster/headcount/
   // report data, which is scope-dependent.
-  const [rooms, classes, programs, flags] = await Promise.all([
+  const startOfToday = startOfDayUTC(new Date());
+  const [rooms, classes, programs, events, flags] = await Promise.all([
     db.room.findMany({
       where: { isActive: true },
       select: { id: true, name: true, code: true, building: true, capacity: true },
@@ -51,6 +53,19 @@ export default async function VolunteerHomePage() {
       select: { id: true, name: true, slug: true, color: true },
       orderBy: { sortOrder: "asc" },
     }),
+    db.event.findMany({
+      where: { isActive: true, date: { gte: startOfToday } },
+      select: {
+        id: true,
+        name: true,
+        date: true,
+        endDate: true,
+        location: true,
+        programId: true,
+        program: { select: { id: true, name: true } },
+      },
+      orderBy: { date: "asc" },
+    }),
     getFeatureFlags(),
   ]);
 
@@ -77,6 +92,15 @@ export default async function VolunteerHomePage() {
       name: p.name,
       slug: p.slug,
       color: p.color,
+    })),
+    events: events.map((e) => ({
+      id: e.id,
+      name: e.name,
+      date: e.date.toISOString(),
+      endDate: e.endDate ? e.endDate.toISOString() : null,
+      location: e.location,
+      programId: e.programId,
+      programName: e.program?.name ?? null,
     })),
   };
 

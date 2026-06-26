@@ -6,7 +6,11 @@
 #   2. `docker compose up -d`
 #   3. Browse to http://localhost:3000/setup and complete the first-run wizard.
 #
-# For TLS termination, put Caddy/Nginx in front. See docs/deployment/docker.md.
+# TLS termination (OPT-IN):
+#   `docker compose --profile tls up -d` adds a Caddy reverse proxy that
+#   terminates HTTPS. Set `DOMAIN` for auto-Let's-Encrypt; leave it empty +
+#   swap to `docker/Caddyfile.lan` for self-signed LAN-only HTTPS. See
+#   docs/deployment/docker.md → "TLS termination with Caddy (opt-in)".
 # =============================================================================
 
 services:
@@ -22,16 +26,15 @@ services:
 
     ports:
       # Next.js (web UI + REST API).
-      # Auto-matches the PORT env var from .env (default 3000).
-      - target: 3000
-        published: "${PORT:-3000}"
-        protocol: tcp
-        mode: host
-      # Realtime mini-service (Socket.io on REALTIME_PORT).
-      - target: 3003
-        published: "${REALTIME_PORT:-3003}"
-        protocol: tcp
-        mode: host
+      # Auto-matches the PORT env var from .env (default 3000). To use a
+      # different port, just set PORT=3001 in .env — this mapping follows
+      # automatically. Also update NEXTAUTH_URL to include the new port.
+      - "${PORT:-3000}:${PORT:-3000}"
+      # Realtime mini-service (Socket.io on REALTIME_PORT). Same rule applies.
+      # Exposed for direct debugging; in production the reverse proxy can
+      # forward /socket.io/ through the Next.js container's port 3000 instead,
+      # but our Caddy gateway uses XTransformPort=3003 so we expose it here.
+      - "3003:3003"
 
     environment:
       NODE_ENV: production
@@ -46,9 +49,20 @@ services:
       # Optional: shared secret for the internal /broadcast endpoint on the
       # realtime service. If unset, the realtime service uses its dev default.
       REALTIME_INTERNAL_KEY: ${REALTIME_INTERNAL_KEY:-}
-      PORT: 3000
-      REALTIME_PORT: 3003
+      # Ports — passed through from .env (or compose-level overrides). The
+      # entrypoint checks both are free before starting services. Override via
+      # .env (PORT=3001, REALTIME_PORT=3004) and remember to update the
+      # matching `ports:` host mapping above.
+      PORT: ${PORT:-3000}
+      REALTIME_PORT: ${REALTIME_PORT:-3003}
       HOSTNAME: 0.0.0.0
+      # Marks this install as a Docker install so the in-app update checker
+      # returns the Docker update command (`docker compose pull && up -d`)
+      # rather than the native script command.
+      CHILDCHECK_DOCKER: "1"
+      # Set CHILDCHETECK_UPDATE_REPO in .env (e.g. "childcheck/childcheck")
+      # to enable the read-only in-app update checker. Leave unset to disable.
+      CHILDCHETECK_UPDATE_REPO: ${CHILDCHETECK_UPDATE_REPO:-}
 
     volumes:
       # SQLite database (persists across container rebuilds).
@@ -59,7 +73,10 @@ services:
       - ./config:/app/config
 
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "--tries=1", "--timeout=3", "http://localhost:3000/api/config"]
+      # Use $$PORT so docker-compose doesn't try to interpolate it from the
+      # host environment — the shell inside the container expands it at
+      # healthcheck time, picking up the PORT env var passed above.
+      test: ["CMD-SHELL", "wget -qO- --tries=1 --timeout=3 http://localhost:$${PORT:-3000}/api/config || exit 1"]
       interval: 30s
       timeout: 5s
       start_period: 30s
@@ -70,20 +87,43 @@ services:
     # boot doesn't see a half-written SQLite file.
     stop_grace_period: 15s
 
-# Optional: uncomment to add a Caddy reverse proxy for TLS.
-# See docs/deployment/docker.md for the full Caddyfile + cert setup.
-#
-#   caddy:
-#     image: caddy:2-alpine
-#     restart: unless-stopped
-#     ports:
-#       - "80:80"
-#       - "443:443"
-#     volumes:
-#       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-#       - caddy_data:/data
-#       - caddy_config:/config
-#
-# volumes:
-#   caddy_data:
-#   caddy_config:
+  # ---------------------------------------------------------------------------
+  # Caddy reverse proxy — OPT-IN TLS termination.
+  #
+  # Activated only when the `tls` profile is enabled:
+  #
+  #     DOMAIN=childcheck.myorg.org docker compose --profile tls up -d
+  #         → auto-Let's-Encrypt (DNS A/AAAA record must point at the host,
+  #           ports 80 + 443 must be open).
+  #
+  #     docker compose --profile tls up -d   # (DOMAIN empty / unset)
+  #         → Caddy serves :443 with `tls internal` (self-signed internal CA).
+  #           First run `cp docker/Caddyfile.lan docker/Caddyfile` so Caddy
+  #           uses the LAN-only template. Import Caddy's root CA into each
+  #           client's trust store (see install/Caddyfile.lan for instructions).
+  #
+  # When `--profile tls` is NOT passed, this service does NOT start and the
+  # childcheck service is reached over plain HTTP as before.
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["tls"]
+    restart: unless-stopped
+    depends_on:
+      - childcheck
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Set DOMAIN in .env to enable auto-Let's-Encrypt. Leave empty for
+      # LAN-only (and swap to docker/Caddyfile.lan — see docker/Caddyfile).
+      DOMAIN: ${DOMAIN:-}
+      PORT: ${PORT:-3000}
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

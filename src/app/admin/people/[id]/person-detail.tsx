@@ -50,13 +50,18 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { PersonForm } from "../person-form";
-import type { PersonDetailDTO, WwccCardDTO } from "@/lib/people";
+import { formatFullName, type PersonDetailDTO, type WwccCardDTO } from "@/lib/people";
 import { PersonGuardianFamiliesSection } from "./guardian-families-section";
 import { PersonCollectionPermissionsSection } from "./collection-permissions-section";
+import {
+  PersonUserAccountSection,
+  type UserSummary,
+} from "./user-account-section";
 
 interface Props {
   personId: string;
   wwccEnabled: boolean;
+  userSummary: UserSummary | null;
   initial: PersonDetailDTO;
 }
 
@@ -75,7 +80,7 @@ const WWCC_TYPES = [
   "Other",
 ];
 
-export function PersonDetail({ personId, wwccEnabled, initial }: Props) {
+export function PersonDetail({ personId, wwccEnabled, userSummary, initial }: Props) {
   const router = useRouter();
   const { t } = useTerminology();
   const [data, setData] = useState<PersonDetailDTO>(initial);
@@ -269,7 +274,7 @@ export function PersonDetail({ personId, wwccEnabled, initial }: Props) {
             <img
               key={photoCacheBust}
               src={`/api/people/${personId}/photo?cb=${photoCacheBust}`}
-              alt={`Photo of ${data.firstName} ${data.lastName}`}
+              alt={`Photo of ${formatFullName(data)}`}
               className="h-32 w-32 rounded-lg border object-cover bg-muted"
             />
             <input
@@ -315,7 +320,7 @@ export function PersonDetail({ personId, wwccEnabled, initial }: Props) {
           <div className="flex-1 space-y-3 min-w-0">
             <div>
               <h2 className="text-xl font-semibold">
-                {data.firstName} {data.lastName}
+                {formatFullName(data)}
               </h2>
               {data.preferredName && (
                 <p className="text-sm text-muted-foreground">
@@ -361,6 +366,11 @@ export function PersonDetail({ personId, wwccEnabled, initial }: Props) {
               )}
             </div>
 
+            {data.middleName && (
+              <p className="text-sm text-muted-foreground">
+                Middle name: <span className="font-medium text-foreground">{data.middleName}</span>
+              </p>
+            )}
             {data.schoolGrade && (
               <p className="text-sm text-muted-foreground">
                 School grade: <span className="font-medium text-foreground">{data.schoolGrade}</span>
@@ -679,6 +689,16 @@ export function PersonDetail({ personId, wwccEnabled, initial }: Props) {
       {/* Stage 4 — Child: who is authorised / blocked to collect this child */}
       {data.personType === "Child" && (
         <PersonCollectionPermissionsSection personId={personId} />
+      )}
+
+      {/* URM — Adult: login account (promote-to-user / manage user) */}
+      {data.personType === "Adult" && (
+        <PersonUserAccountSection
+          personId={personId}
+          firstName={data.firstName}
+          lastName={data.lastName}
+          initial={userSummary}
+        />
       )}
     </div>
   );

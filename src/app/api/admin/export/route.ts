@@ -75,6 +75,7 @@ async function exportPeopleCsv(actorUserId: string) {
   const header = [
     "id",
     "firstName",
+    "middleName",
     "lastName",
     "preferredName",
     "personType",
@@ -95,6 +96,7 @@ async function exportPeopleCsv(actorUserId: string) {
   const csvRows: CsvValue[][] = rows.map((p) => [
     p.id,
     p.firstName,
+    p.middleName ?? "",
     p.lastName,
     p.preferredName ?? "",
     p.personType,

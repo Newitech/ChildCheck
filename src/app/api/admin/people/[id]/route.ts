@@ -13,6 +13,7 @@ const GENDERS = new Set(["Male", "Female", "Other"]);
 
 const updateSchema = z.object({
   firstName: z.string().trim().min(1).max(80).optional(),
+  middleName: z.string().trim().max(80).optional().nullable(),
   lastName: z.string().trim().min(1).max(80).optional(),
   preferredName: z.string().trim().min(0).max(80).optional().nullable(),
   personType: z.enum(["Adult", "Child"]).optional(),
@@ -98,6 +99,13 @@ export async function PUT(
   if (p.firstName !== undefined && p.firstName !== existing.firstName) {
     data.firstName = p.firstName;
     changed.firstName = p.firstName;
+  }
+  if (p.middleName !== undefined) {
+    const v = nullIfEmpty(p.middleName);
+    if (v !== existing.middleName) {
+      data.middleName = v;
+      changed.middleName = v;
+    }
   }
   if (p.lastName !== undefined && p.lastName !== existing.lastName) {
     data.lastName = p.lastName;
@@ -257,7 +265,12 @@ export async function DELETE(
     action: "person.delete",
     entity: "Person",
     entityId: id,
-    details: { softDelete: true, name: `${person.firstName} ${person.lastName}` },
+    details: {
+      softDelete: true,
+      name: [person.firstName, person.middleName, person.lastName]
+        .filter((s): s is string => !!s && s.trim().length > 0)
+        .join(" "),
+    },
   });
 
   return NextResponse.json({ ok: true });

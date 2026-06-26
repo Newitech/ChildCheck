@@ -19,6 +19,16 @@
 #   sudo bash install/install-linux.sh                       # download latest release
 #   sudo bash install/install-linux.sh /path/to/tarball      # use local tarball
 #   sudo bash install/install-linux.sh /path/to/dir          # use unpacked dir
+#   sudo bash install/install-linux.sh --tls                 # also install + configure Caddy for HTTPS
+#
+# Flags:
+#   --tls          Opt-in TLS termination via Caddy. Installs Caddy from the
+#                  official apt repo, generates /etc/caddy/Caddyfile from
+#                  install/Caddyfile.domain (if you provide a domain) or
+#                  install/Caddyfile.lan (if blank — self-signed internal CA),
+#                  enables + starts the `caddy` systemd service, and rewrites
+#                  NEXTAUTH_URL to https://<domain-or-host>/. Without this
+#                  flag the install stays on plain HTTP (unchanged).
 #
 # Environment variables (optional):
 #   CHILDCHECK_VERSION     Version to download (default: latest)
@@ -26,6 +36,22 @@
 #   CHILDCHECK_URL_BASE    Base URL for downloads (default: https://github.com/childcheck/childcheck/releases/download)
 # =============================================================================
 set -euo pipefail
+
+# Parse `--tls` flag (anywhere in argv). Remaining args (after shift) become
+# the source-path / version args handled below.
+TLS_ENABLED=0
+NEW_ARGS=()
+for arg in "$@"; do
+  case "${arg}" in
+    --tls) TLS_ENABLED=1 ;;
+    --help|-h)
+      sed -n '2,30p' "$0"
+      exit 0
+      ;;
+    *) NEW_ARGS+=("${arg}") ;;
+  esac
+done
+set -- "${NEW_ARGS[@]+"${NEW_ARGS[@]}"}"
 
 # Must be root.
 if [ "$(id -u)" -ne 0 ]; then
@@ -58,6 +84,97 @@ info()  { echo "${GREEN}[info]${NC}  $*"; }
 warn()  { echo "${YELLOW}[warn]${NC}  $*"; }
 err()   { echo "${RED}[error]${NC} $*" >&2; }
 step()  { echo ""; echo "${CYAN}==>${NC} $*"; }
+
+# ----------------------------------------------------------------------------
+# Port helpers
+# ----------------------------------------------------------------------------
+# port_in_use(port) → 0 if something is listening on it, 1 if free.
+# Tries ss first (iproute2), then /proc/net/tcp, then a /dev/tcp probe.
+port_in_use() {
+  local port="$1"
+  if command -v ss >/dev/null 2>&1; then
+    if ss -tlnH 2>/dev/null | awk '{print $4}' | grep -E "[:.]${port}\$" >/dev/null 2>&1; then
+      return 0
+    fi
+    return 1
+  fi
+  if [ -r /proc/net/tcp ]; then
+    local port_hex port_dec addr
+    while IFS= read -r line; do
+      case "${line}" in *"local_address"*) continue ;; esac
+      addr="$(awk '{print $2}' <<<"${line}")"
+      [ -z "${addr}" ] && continue
+      port_hex="${addr##*:}"
+      [ -z "${port_hex}" ] && continue
+      port_dec="$(( 16#${port_hex} ))"
+      if [ "${port_dec}" -eq "${port}" ]; then
+        return 0
+      fi
+    done < /proc/net/tcp
+    if [ -r /proc/net/tcp6 ]; then
+      while IFS= read -r line; do
+        case "${line}" in *"local_address"*) continue ;; esac
+        addr="$(awk '{print $2}' <<<"${line}")"
+        [ -z "${addr}" ] && continue
+        port_hex="${addr##*:}"
+        [ -z "${port_hex}" ] && continue
+        port_dec="$(( 16#${port_hex} ))"
+        if [ "${port_dec}" -eq "${port}" ]; then
+          return 0
+        fi
+      done < /proc/net/tcp6
+    fi
+    return 1
+  fi
+  # Last-ditch /dev/tcp probe.
+  if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
+    exec 3>&- 3<&-
+    return 0
+  fi
+  return 1
+}
+
+# prompt_port(default, label) → echoes the chosen port number.
+# If the default port is already in use, prompts the user for an alternative
+# and validates the new value (numeric + free). Loops until a free port is
+# provided (or the user explicitly accepts the default — which then fails
+# later when the service tries to bind).
+prompt_port() {
+  local default="$1" label="$2"
+  local port="${default}"
+
+  if port_in_use "${default}"; then
+    warn "port ${default} is already in use (${label})."
+    # Suggest the next port up as a default alternative.
+    local suggest=$(( default + 1 ))
+    while port_in_use "${suggest}"; do
+      suggest=$(( suggest + 1 ))
+    done
+    read -r -p "Use an alternative port for ${label}? [${suggest}]: " alt </dev/tty
+    port="${alt:-${suggest}}"
+    # Validate: numeric + in range.
+    while ! [[ "${port}" =~ ^[0-9]+$ ]] || [ "${port}" -lt 1 ] || [ "${port}" -gt 65535 ]; do
+      err "'${port}' is not a valid port (must be 1-65535)."
+      read -r -p "${label} port [${suggest}]: " alt </dev/tty
+      port="${alt:-${suggest}}"
+    done
+    # Validate: free.
+    while port_in_use "${port}"; do
+      err "port ${port} is also in use."
+      read -r -p "${label} port [${suggest}]: " alt </dev/tty
+      port="${alt:-${suggest}}"
+      while ! [[ "${port}" =~ ^[0-9]+$ ]] || [ "${port}" -lt 1 ] || [ "${port}" -gt 65535 ]; do
+        err "'${port}' is not a valid port (must be 1-65535)."
+        read -r -p "${label} port [${suggest}]: " alt </dev/tty
+        port="${alt:-${suggest}}"
+      done
+    done
+    if [ "${port}" != "${default}" ]; then
+      info "using ${label} port ${port} (default ${default} was in use)."
+    fi
+  fi
+  echo "${port}"
+}
 
 # ----------------------------------------------------------------------------
 # 0. Parse args / locate the binary
@@ -191,13 +308,24 @@ step "Configuring environment"
 ENV_FILE="${DATA_DIR}/config/.env"
 if [ -f "${ENV_FILE}" ]; then
   info ".env already exists at ${ENV_FILE} — leaving as-is."
+  # Pull existing PORT/REALTIME_PORT so the health-check + summary use the
+  # same values the service is actually configured for.
+  PORT="$(grep -E '^PORT=' "${ENV_FILE}" | cut -d= -f2- || true)"
+  PORT="${PORT:-3000}"
+  REALTIME_PORT="$(grep -E '^REALTIME_PORT=' "${ENV_FILE}" | cut -d= -f2- || true)"
+  REALTIME_PORT="${REALTIME_PORT:-3003}"
 else
-  # Determine the public URL. Default to the box's primary IP.
-  DEFAULT_URL="http://localhost:3000"
+  # Prompt for ports if the defaults are in use.
+  step "Choosing ports (default: web 3000, realtime 3003)"
+  PORT="$(prompt_port 3000 "web server")"
+  REALTIME_PORT="$(prompt_port 3003 "realtime (Socket.io)")"
+
+  # Determine the public URL. Default to the box's primary IP + chosen PORT.
+  DEFAULT_URL="http://localhost:${PORT}"
   if command -v hostname >/dev/null 2>&1; then
     IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
     if [ -n "${IP}" ]; then
-      DEFAULT_URL="http://${IP}:3000"
+      DEFAULT_URL="http://${IP}:${PORT}"
     fi
   fi
 
@@ -234,13 +362,14 @@ CHILDCHECK_DATA_KEY=${CHILDCHECK_DATA_KEY}
 DATABASE_URL=file:${DATA_DIR}/db/custom.db
 CHILDCHECK_DATA_DIR=${DATA_DIR}/data
 CHILDCHECK_CONFIG_DIR=${DATA_DIR}/config
-REALTIME_PORT=3003
-PORT=3000
+REALTIME_PORT=${REALTIME_PORT}
+PORT=${PORT}
 HOSTNAME=0.0.0.0
 EOF
   chmod 600 "${ENV_FILE}"
   chown "${SERVICE_USER}:${SERVICE_GROUP}" "${ENV_FILE}"
   info ".env written to ${ENV_FILE} (chmod 600)."
+  info "  PORT=${PORT}  REALTIME_PORT=${REALTIME_PORT}"
 fi
 
 # ----------------------------------------------------------------------------
@@ -300,17 +429,127 @@ info "service enabled + started."
 step "Waiting for service to come up"
 OK=0
 for i in $(seq 1 30); do
-  if curl -fsS "http://localhost:3000/api/config" >/dev/null 2>&1; then
+  if curl -fsS "http://localhost:${PORT}/api/config" >/dev/null 2>&1; then
     OK=1
     break
   fi
   sleep 1
 done
 if [ "${OK}" -ne 1 ]; then
-  warn "service did not respond on http://localhost:3000/api/config within 30s."
+  warn "service did not respond on http://localhost:${PORT}/api/config within 30s."
   warn "check logs with:  journalctl -u ${SERVICE_USER} -f"
 else
   info "service is up."
+fi
+
+# ----------------------------------------------------------------------------
+# 6a. Opt-in TLS via Caddy (--tls flag)
+# ----------------------------------------------------------------------------
+# Install + configure Caddy so the app is served over HTTPS. The user provides
+# a domain name (auto-Let's-Encrypt) OR leaves it blank for LAN-only with
+# Caddy's built-in self-signed internal CA.
+CADDYFILE_PATH="/etc/caddy/Caddyfile"
+if [ "${TLS_ENABLED}" -eq 1 ]; then
+  step "Configuring TLS via Caddy (--tls)"
+
+  # Prompt for the domain name (blank = LAN-only self-signed).
+  echo ""
+  echo "  Domain name (blank for LAN-only self-signed):"
+  echo "    - For a real domain (e.g. checkin.mychurch.org): Caddy auto-provisions"
+  echo "      + auto-renews a Let's Encrypt cert. Ports 80 + 443 must be open."
+  echo "    - Blank: Caddy uses its built-in internal CA (self-signed). Import"
+  echo "      Caddy's root cert into each client's trust store — see"
+  echo "      install/Caddyfile.lan for the per-OS commands."
+  read -r -p "  Domain [blank for LAN-only]: " TLS_DOMAIN </dev/tty
+  TLS_DOMAIN="${TLS_DOMAIN:-}"
+
+  # Install Caddy from the official apt repo.
+  # https://caddyserver.com/docs/install#debian-ubuntu-fedora-arch
+  if ! command -v caddy >/dev/null 2>&1; then
+    info "installing Caddy from the official apt repo."
+    apt-get update -qq
+    apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https curl
+    # The keyring add may fail if it's already present — ignore.
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+      | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null || true
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+      | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
+    apt-get update -qq
+    apt-get install -y -qq caddy
+  else
+    info "Caddy already installed — skipping apt install."
+  fi
+
+  # Locate the Caddyfile templates shipped alongside this script.
+  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+  DOMAIN_TEMPLATE="${SCRIPT_DIR}/Caddyfile.domain"
+  LAN_TEMPLATE="${SCRIPT_DIR}/Caddyfile.lan"
+
+  # Generate /etc/caddy/Caddyfile from the appropriate template.
+  mkdir -p "$(dirname "${CADDYFILE_PATH}")"
+  if [ -n "${TLS_DOMAIN}" ]; then
+    # Domain mode — auto-Let's-Encrypt.
+    info "using DOMAIN mode (auto-Let's-Encrypt for ${TLS_DOMAIN})."
+    if [ -f "${DOMAIN_TEMPLATE}" ]; then
+      sed "s|{\$DOMAIN}|${TLS_DOMAIN}|g" "${DOMAIN_TEMPLATE}" > "${CADDYFILE_PATH}"
+    else
+      cat > "${CADDYFILE_PATH}" <<EOF
+${TLS_DOMAIN} {
+        reverse_proxy localhost:${PORT}
+        header {
+                Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+                X-Content-Type-Options "nosniff"
+                X-Frame-Options "DENY"
+                Referrer-Policy "strict-origin-when-cross-origin"
+                Permissions-Policy "geolocation=(), microphone=(), camera=()"
+        }
+}
+EOF
+    fi
+    TLS_PUBLIC_HOST="${TLS_DOMAIN}"
+  else
+    # LAN-only mode — tls internal (self-signed internal CA).
+    info "using LAN-only mode (Caddy internal CA — self-signed)."
+    if [ -f "${LAN_TEMPLATE}" ]; then
+      sed "s|{\$PORT:3000}|${PORT}|g" "${LAN_TEMPLATE}" > "${CADDYFILE_PATH}"
+    else
+      cat > "${CADDYFILE_PATH}" <<EOF
+:443 {
+        tls internal
+        reverse_proxy localhost:${PORT}
+}
+EOF
+    fi
+    # Use the box's primary IP / hostname for NEXTAUTH_URL.
+    TLS_PUBLIC_HOST="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    if [ -z "${TLS_PUBLIC_HOST}" ]; then
+      TLS_PUBLIC_HOST="localhost"
+    fi
+  fi
+  chmod 644 "${CADDYFILE_PATH}"
+  info "Caddyfile written to ${CADDYFILE_PATH}."
+
+  # Open ports 80 + 443 via UFW if available (best-effort).
+  if command -v ufw >/dev/null 2>&1; then
+    ufw allow 80/tcp 2>/dev/null || true
+    ufw allow 443/tcp 2>/dev/null || true
+    info "UFW: allowed 80/tcp + 443/tcp (if UFW is active)."
+  fi
+
+  # Enable + start the caddy service.
+  systemctl daemon-reload
+  systemctl enable caddy 2>/dev/null || true
+  systemctl restart caddy || systemctl reload caddy 2>/dev/null || true
+  info "caddy service enabled + started."
+
+  # Rewrite NEXTAUTH_URL to the HTTPS URL so NextAuth marks cookies Secure.
+  HTTPS_URL="https://${TLS_PUBLIC_HOST}"
+  if [ -f "${ENV_FILE}" ]; then
+    sed -i "s|^NEXTAUTH_URL=.*|NEXTAUTH_URL=${HTTPS_URL}|" "${ENV_FILE}"
+    info "NEXTAUTH_URL updated to ${HTTPS_URL} in ${ENV_FILE}."
+    # Restart ChildCheck so it picks up the new NEXTAUTH_URL.
+    systemctl restart "${SERVICE_USER}"
+  fi
 fi
 
 # ----------------------------------------------------------------------------
@@ -335,6 +574,21 @@ echo ""
 echo " Public URL:   ${PUBLIC_URL}"
 echo " Setup wizard: ${PUBLIC_URL}/setup"
 echo ""
+if [ "${TLS_ENABLED}" -eq 1 ]; then
+  echo " TLS:          Caddy reverse proxy on ports 80 + 443"
+  echo "               Caddyfile:  ${CADDYFILE_PATH}"
+  echo "               Service:    systemctl status caddy"
+  echo "               Logs:       journalctl -u caddy -f"
+  echo ""
+  if [ -n "${TLS_DOMAIN:-}" ]; then
+    echo "               Cert:       auto-Let's-Encrypt for ${TLS_DOMAIN}"
+  else
+    echo "               Cert:       Caddy internal CA (self-signed)."
+    echo "                           Import the root cert on each client:"
+    echo "                           /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt"
+  fi
+  echo ""
+fi
 echo " Next step:"
 echo "   1. Open the Setup URL above in a browser."
 echo "   2. Fill in your organisation name + first admin user."

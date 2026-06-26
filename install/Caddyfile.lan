@@ -1,0 +1,64 @@
+# =============================================================================
+# ChildCheck — Caddyfile template for LAN-ONLY (self-signed) deployments
+# =============================================================================
+#
+# Use this template when you're deploying on a trusted LAN without a real DNS
+# name (e.g. running ChildCheck on a church volunteer's laptop at 192.168.1.50).
+# Caddy uses its built-in internal CA to mint certificates on the fly — no
+# Let's Encrypt, no port-80 inbound requirement, no DNS record needed.
+#
+# The catch: browsers won't trust Caddy's internal CA until you import the
+# root certificate into each client's trust store. Caddy creates the root CA
+# on first run; the path on Linux is:
+#
+#   /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt
+#
+# On macOS (brew install caddy):
+#   ~/Library/Application Support/Caddy/pki/authorities/local/root.crt
+#
+# To trust the root CA:
+#
+#   * Linux (Debian/Ubuntu — affects curl + Chrome + most apps):
+#       sudo cp /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt \
+#          /usr/local/share/ca-certificates/caddy-local-root.crt
+#       sudo update-ca-certificates
+#
+#   * macOS (system-wide — affects Safari + most apps):
+#       sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain \
+#          "$HOME/Library/Application Support/Caddy/pki/authorities/local/root.crt"
+#
+#   * Windows (current user):
+#       Import-Module Pki
+#       Import-Certificate -FilePath C:\ProgramData\Caddy\pki\authorities\local\root.crt `
+#         -CertStoreLocation Cert:\CurrentUser\Root
+#
+# SMOOTHER ALTERNATIVE — use mkcert (https://github.com/FiloSottile/mkcert)
+# instead of Caddy's internal CA. mkcert installs the root CA into the OS + the
+# browser trust stores for you, then you point Caddy at the generated cert:
+#
+#     mkcert -install                   # one-time: install the local CA
+#     mkcert 192.168.1.50 childcheck.local
+#     # → produces 192.168.1.50+1.pem + 192.168.1.50+1-key.pem
+#
+# Then in this Caddyfile, replace `tls internal` with:
+#
+#     tls /path/to/192.168.1.50+1-key.pem /path/to/192.168.1.50+1.pem
+#
+# =============================================================================
+:443 {
+	# Caddy's built-in self-signed CA. Auto-generates a cert for whatever
+	# hostname the client used to reach the server.
+	tls internal
+
+	# Reverse-proxy to the ChildCheck process (default port 3000).
+	reverse_proxy localhost:{$PORT:3000}
+
+	# Security headers (same as the domain template).
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+	}
+}

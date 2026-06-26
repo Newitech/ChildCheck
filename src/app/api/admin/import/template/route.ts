@@ -33,6 +33,7 @@ export async function GET(req: Request) {
     const example1 = [
       "", // id (blank for new)
       "Jane",
+      "Marie",
       "Admin",
       "",
       "Adult",
@@ -52,6 +53,7 @@ export async function GET(req: Request) {
     const example2 = [
       "",
       "Mary",
+      "",
       "Smith",
       "Maz",
       "Child",

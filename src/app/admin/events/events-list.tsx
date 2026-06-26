@@ -454,7 +454,7 @@ export function EventsList() {
                               <AlertDialogTitle>Archive {ev.name}?</AlertDialogTitle>
                               <AlertDialogDescription>
                                 This soft-deletes the event (sets <code>isActive=false</code>).
-                                Stage 6 kiosk will no longer show it.
+                                The kiosk will no longer show it.
                               </AlertDialogDescription>
                             </AlertDialogHeader>
                             <AlertDialogFooter>

@@ -14,6 +14,7 @@ const GENDERS = new Set(["Male", "Female", "Other"]);
 
 const createSchema = z.object({
   firstName: z.string().trim().min(1).max(80),
+  middleName: z.string().trim().max(80).optional().nullable(),
   lastName: z.string().trim().min(1).max(80),
   preferredName: z.string().trim().min(1).max(80).optional().nullable(),
   personType: z.enum(["Adult", "Child"]).default("Adult"),
@@ -87,6 +88,7 @@ export async function GET(req: Request) {
     where.AND.push({
       OR: [
         { firstName: { contains: q } },
+        { middleName: { contains: q } },
         { lastName: { contains: q } },
         { preferredName: { contains: q } },
         { email: { contains: q } },
@@ -145,6 +147,7 @@ export async function POST(req: Request) {
   const created = await db.person.create({
     data: {
       firstName: p.firstName,
+      middleName: nullIfEmpty(p.middleName),
       lastName: p.lastName,
       preferredName: nullIfEmpty(p.preferredName),
       personType: p.personType,

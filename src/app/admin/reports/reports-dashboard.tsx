@@ -242,11 +242,27 @@ function EmailDialog({ open, onOpenChange, reportType, buildHref }: EmailDialogP
           params: paramObj,
         }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      toast.success("Report email queued (stub — real SMTP delivery is a future stage).");
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+      };
+      if (res.status === 409 || data.error === "smtp_not_configured") {
+        toast.error("SMTP is not configured", {
+          description: "Configure SMTP in Settings → Email first, then try again.",
+        });
+        return;
+      }
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+      toast.success("Report emailed", {
+        description: `Sent to ${to.trim()}.`,
+      });
       onOpenChange(false);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error("Failed to email report", {
+        description: e instanceof Error ? e.message : String(e),
+      });
     } finally {
       setSending(false);
     }
@@ -258,9 +274,9 @@ function EmailDialog({ open, onOpenChange, reportType, buildHref }: EmailDialogP
         <DialogHeader>
           <DialogTitle>Email report</DialogTitle>
           <DialogDescription>
-            Email a CSV copy of this report to a recipient. (Real SMTP delivery
-            arrives in a future stage — this stub records the request + audit
-            entry only.)
+            Email a CSV copy of this report to a recipient. The CSV is generated
+            server-side (identical to the in-app download) and attached to the
+            message. Requires SMTP to be configured in Settings → Email.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">

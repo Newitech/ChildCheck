@@ -82,15 +82,106 @@ NextAuth session cookies are marked `Secure` only when `NEXTAUTH_URL` is
 HTTPS. Without TLS, cookies travel in cleartext and can be sniffed or
 stolen. **Always run behind a TLS-terminating reverse proxy in production.**
 
-### Caddy (recommended — automatic Let's Encrypt)
+> ⚠️ **`Secure` cookies only work over HTTPS.** If you browse to
+> `http://...`, NextAuth silently drops the `Secure` flag and the cookie
+> travels in cleartext — anyone on the same network can sniff + replay it.
+> Setting `NEXTAUTH_URL=https://...` alone is NOT enough — you must actually
+> serve the app over HTTPS for the cookie to be marked `Secure`.
+
+### Opt-in TLS via the install scripts (`--tls` / `-Tls`)
+
+The native installers ship an **opt-in** TLS flag so you can decide whether
+Caddy terminates HTTPS for you. Without the flag the install stays on plain
+HTTP (unchanged) — useful for trusted-LAN deployments or when you already
+have a reverse proxy in front.
+
+| Platform | Flag | What it does |
+|---|---|---|
+| Linux | `--tls` | Installs Caddy from the official apt repo, generates `/etc/caddy/Caddyfile`, enables the `caddy` systemd service, opens UFW 80/443, rewrites `NEXTAUTH_URL` to `https://`. |
+| macOS | `--tls` | `brew install caddy`, generates a Caddyfile at the Homebrew path, runs Caddy via a second launchd plist (`org.childcheck.caddy.plist`). |
+| Windows | `-Tls` | Downloads Caddy for Windows into the install dir, generates a Caddyfile, registers a second WinSW service (`ChildCheck-Caddy`), opens Windows Firewall 80/443. |
+| Synology NAS | `--tls` | Prints step-by-step instructions for DSM's built-in reverse proxy (the preferred path on bare-metal DSM, since DSM has no native Caddy package). For Docker-on-NAS, copies the Caddyfile templates into `/volume1/childcheck/docker/` so you can run `docker compose --profile tls up -d`. |
+
+Each install script prompts for a domain name:
+
+- **Domain provided** (e.g. `checkin.mychurch.org`): Caddy auto-provisions +
+  auto-renews a Let's Encrypt cert. Ports 80 (for the ACME HTTP-01 challenge)
+  and 443 must be open on the host.
+- **Blank (LAN-only):** Caddy uses its built-in internal CA (`tls internal`)
+  to mint self-signed certificates on the fly. No port-80 inbound requirement,
+  no DNS record needed. **Browsers won't trust the cert until you import
+  Caddy's root CA into each client's trust store** — see below.
+
+### Opt-in TLS via docker-compose (`--profile tls`)
+
+The bundled `docker-compose.yml` defines a `caddy` service under a `tls`
+profile so the default `docker compose up -d` stays HTTP-only:
+
+```bash
+# Default — plain HTTP on port 3000 (unchanged):
+docker compose up -d
+
+# Opt-in HTTPS via Caddy (auto-Let's-Encrypt for a real domain):
+DOMAIN=childcheck.myorg.org docker compose --profile tls up -d
+
+# Opt-in HTTPS, LAN-only (no domain — self-signed via Caddy's internal CA):
+cp docker/Caddyfile.lan docker/Caddyfile    # one-time swap
+docker compose --profile tls up -d
+```
+
+See [docker.md → TLS termination with Caddy (opt-in)](./docker.md#tls-termination-with-caddy-opt-in)
+for the full walkthrough.
+
+### Importing Caddy's internal root CA (LAN-only path)
+
+When you pick the LAN-only path (`tls internal`), Caddy creates a root CA on
+first run. Browsers won't trust certs signed by it until you import the root
+cert into each client's trust store. Caddy stores the root cert at:
+
+| OS | Path |
+|---|---|
+| Linux | `/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt` |
+| macOS | `~/Library/Application Support/Caddy/pki/authorities/local/root.crt` |
+| Windows | `C:\ProgramData\Caddy\pki\authorities\local\root.crt` |
+| Docker | `/data/caddy/pki/authorities/local/root.crt` (inside the `caddy` container — `docker cp caddy:/data/caddy/pki/authorities/local/root.crt ./root.crt`) |
+
+Trust commands (run on each client device that will browse to ChildCheck):
+
+```bash
+# Linux (Debian/Ubuntu — affects curl, Chrome, most apps):
+sudo cp root.crt /usr/local/share/ca-certificates/caddy-local-root.crt
+sudo update-ca-certificates
+
+# macOS (system-wide — affects Safari + most apps):
+sudo security add-trusted-cert -d -r trustRoot \
+  -k /Library/Keychains/System.keychain root.crt
+```
+
+```powershell
+# Windows (current user):
+Import-Module Pki
+Import-Certificate -FilePath .\root.crt `
+  -CertStoreLocation Cert:\CurrentUser\Root
+```
+
+> 💡 **Smoother alternative:** use [mkcert](https://github.com/FiloSottile/mkcert)
+> instead of Caddy's internal CA. `mkcert -install` installs the local CA
+> into the OS + browser trust stores for you, then you point Caddy at the
+> generated cert (`tls /path/to/key.pem /path/to/cert.pem`).
+
+### Manual Caddy config (no install script)
+
+If you installed the binary manually (or built from source), the install
+scripts ship Caddyfile templates you can copy + edit:
+
+- `install/Caddyfile.domain` — internet-facing, auto-Let's-Encrypt.
+- `install/Caddyfile.lan` — LAN-only, `tls internal` self-signed.
 
 ```caddyfile
-# /etc/caddy/Caddyfile
+# /etc/caddy/Caddyfile (Linux) — copied from install/Caddyfile.domain
 checkin.mychurch.org {
-    # Reverse-proxy to the ChildCheck container / process.
     reverse_proxy 127.0.0.1:3000
 
-    # Security headers
     header {
         Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
         X-Content-Type-Options "nosniff"
@@ -98,9 +189,6 @@ checkin.mychurch.org {
         Referrer-Policy "strict-origin-when-cross-origin"
         Permissions-Policy "geolocation=(), microphone=(), camera=()"
     }
-
-    # Rate-limit at the proxy too (defence in depth).
-    # See https://caddyserver.com/docs/json/apps/http/servers/routes/handle/rate_limit/
 }
 ```
 

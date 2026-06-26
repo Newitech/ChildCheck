@@ -1,0 +1,42 @@
+# =============================================================================
+# ChildCheck — docker-compose Caddyfile (DOMAIN mode, default)
+# =============================================================================
+#
+# This is the DEFAULT Caddyfile used by the `caddy` service in
+# docker-compose.yml (under the `tls` profile). It serves HTTPS at the domain
+# named by the DOMAIN env var, with Caddy's automatic Let's Encrypt
+# provisioning + renewal.
+#
+# Usage:
+#   DOMAIN=childcheck.myorg.org docker compose --profile tls up -d
+#
+# Requirements for Let's Encrypt to succeed:
+#   1. A DNS A and/or AAAA record for the domain pointing at the host running
+#      Docker.
+#   2. Ports 80 AND 443 open on the host (80 is needed for the ACME HTTP-01
+#      challenge; 443 is what clients connect to).
+#   3. The DOMAIN env var set to the EXACT hostname users will browse to
+#      (no scheme, no path, no port).
+#
+# LAN-only (no domain, self-signed internal CA):
+#   Replace this file with docker/Caddyfile.lan (also shipped in this repo):
+#
+#       cp docker/Caddyfile.lan docker/Caddyfile
+#
+#   Then run `docker compose --profile tls up -d` (no DOMAIN set). Caddy uses
+#   its built-in internal CA; import the root cert into each client's trust
+#   store (see install/Caddyfile.lan for per-OS instructions).
+#
+# =============================================================================
+{$DOMAIN} {
+	# Caddy auto-provisions + auto-renews a Let's Encrypt cert for $DOMAIN.
+	reverse_proxy childcheck:{$PORT:3000}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+	}
+}

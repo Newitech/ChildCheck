@@ -113,11 +113,21 @@ interface HeadcountLogItem {
 interface RoomOption { id: string; name: string; code: string | null; building: string | null; capacity: number | null; }
 interface ClassOption { id: string; name: string; programId: string; programName: string; roomId: string | null; roomName: string | null; ageMin: number | null; ageMax: number | null; }
 interface ProgramOption { id: string; name: string; slug: string; color: string | null; }
+interface EventOption {
+  id: string;
+  name: string;
+  date: string;        // ISO
+  endDate: string | null;
+  location: string | null;
+  programId: string | null;
+  programName: string | null;
+}
 
 interface ScopeOptions {
   rooms: RoomOption[];
   classes: ClassOption[];
   programs: ProgramOption[];
+  events: EventOption[];
 }
 
 interface ReportItem {
@@ -233,37 +243,61 @@ export function VolunteerDashboard({
 
   const scopeOptions = initialScopeOptions;
 
-  // Scope selectors.
-  const [scopeKind, setScopeKind] = useState<"program" | "class" | "room">("program");
+  // Scope selectors. "all" = no specific scope, show ALL currently-checked-in
+  // children across the org. "event" = pick an event, show children checked
+  // in to that event's session.
+  const [scopeKind, setScopeKind] = useState<"all" | "program" | "class" | "room" | "event">("all");
   const [programId, setProgramId] = useState<string>("");
   const [classId, setClassId] = useState<string>("");
   const [roomId, setRoomId] = useState<string>("");
+  const [eventId, setEventId] = useState<string>("");
   const [date, setDate] = useState<string>(todayIsoDate());
 
   // Default the program selector to the first active program today, if any.
+  // (Only relevant once the user switches scope to "program".)
   useEffect(() => {
     if (!programId && scopeOptions.programs.length > 0) {
       setProgramId(scopeOptions.programs[0].id);
     }
   }, [scopeOptions.programs, programId]);
 
-  // Derived scope query params. We prefer class > room > program so the most
-  // specific scope wins. (When the user picks "class" scope, the program
-  // selector narrows the class options but the API query uses classId only.)
+  // Default the event selector to the first upcoming event, if any.
+  useEffect(() => {
+    if (!eventId && scopeOptions.events.length > 0) {
+      setEventId(scopeOptions.events[0].id);
+    }
+  }, [scopeOptions.events, eventId]);
+
+  // Derived scope query params. "all" returns null across the board — the
+  // roster/report APIs interpret "no scope" as "all checked-in children for
+  // the date". For the other scope kinds, we wait until the user has picked
+  // a specific id before populating (so the roster doesn't fetch with a
+  // half-picked scope).
   const activeScope = useMemo(() => {
-    if (scopeKind === "class" && classId) return { classId, roomId: null, programId: null };
-    if (scopeKind === "room" && roomId) return { classId: null, roomId, programId: null };
-    if (scopeKind === "program" && programId) return { classId: null, roomId: null, programId };
-    return { classId: null, roomId: null, programId: null };
-  }, [scopeKind, classId, roomId, programId]);
+    if (scopeKind === "all") return { classId: null, roomId: null, programId: null, eventId: null };
+    if (scopeKind === "event" && eventId) return { classId: null, roomId: null, programId: null, eventId };
+    if (scopeKind === "class" && classId) return { classId, roomId: null, programId: null, eventId: null };
+    if (scopeKind === "room" && roomId) return { classId: null, roomId, programId: null, eventId: null };
+    if (scopeKind === "program" && programId) return { classId: null, roomId: null, programId, eventId: null };
+    return { classId: null, roomId: null, programId: null, eventId: null };
+  }, [scopeKind, classId, roomId, programId, eventId]);
 
   // The realtime room name to join — matches roomsForScope() on the server.
+  // For "all" scope we join the global `org:all` channel so any check-in/out
+  // across the org refreshes the dashboard. For "event" we join `event:<id>`.
   const realtimeRoom = useMemo<string | null>(() => {
+    if (scopeKind === "all") return "org:all";
+    if (activeScope.eventId) return `event:${activeScope.eventId}`;
     if (activeScope.roomId) return `room:${activeScope.roomId}`;
     if (activeScope.classId) return `class:${activeScope.classId}`;
     if (activeScope.programId) return `program:${activeScope.programId}`;
     return null;
-  }, [activeScope]);
+  }, [scopeKind, activeScope]);
+
+  // Whether the current scope is one that the headcount panel can record
+  // against (it needs a room or class — events + "all" don't have one).
+  const headcountAvailable =
+    scopeKind !== "all" && scopeKind !== "event" && (!!activeScope.roomId || !!activeScope.classId);
 
   // Roster state.
   const [roster, setRoster] = useState<RosterChild[]>([]);
@@ -272,9 +306,14 @@ export function VolunteerDashboard({
   const rosterSeq = useRef(0);
 
   const fetchRoster = useCallback(async () => {
-    if (!activeScope.programId && !activeScope.classId && !activeScope.roomId) {
-      setRoster([]);
-      return;
+    // For "all" scope we fetch with NO scope params (the API returns all
+    // checked-in children for the date). For the other scope kinds we wait
+    // until the user has picked a specific id.
+    if (scopeKind !== "all") {
+      if (!activeScope.programId && !activeScope.classId && !activeScope.roomId && !activeScope.eventId) {
+        setRoster([]);
+        return;
+      }
     }
     const mySeq = ++rosterSeq.current;
     setRosterLoading(true);
@@ -284,6 +323,7 @@ export function VolunteerDashboard({
       if (activeScope.programId) params.set("programId", activeScope.programId);
       if (activeScope.classId) params.set("classId", activeScope.classId);
       if (activeScope.roomId) params.set("roomId", activeScope.roomId);
+      if (activeScope.eventId) params.set("eventId", activeScope.eventId);
       params.set("date", date);
       const res = await fetch(`/api/volunteer/roster?${params.toString()}`, {
         cache: "no-store",
@@ -298,7 +338,7 @@ export function VolunteerDashboard({
     } finally {
       if (mySeq === rosterSeq.current) setRosterLoading(false);
     }
-  }, [activeScope.programId, activeScope.classId, activeScope.roomId, date]);
+  }, [scopeKind, activeScope.programId, activeScope.classId, activeScope.roomId, activeScope.eventId, date]);
 
   // Initial load + on scope change.
   useEffect(() => {
@@ -336,6 +376,8 @@ export function VolunteerDashboard({
   const [headcountHistory, setHeadcountHistory] = useState<HeadcountLogItem[]>([]);
 
   const fetchHeadcounts = useCallback(async () => {
+    // Headcounts are keyed on roomId/classId — "all" and "event" scopes
+    // don't have one, so there's nothing to fetch.
     if (!activeScope.roomId && !activeScope.classId) {
       setHeadcountHistory([]);
       return;
@@ -367,7 +409,7 @@ export function VolunteerDashboard({
       toast.error("Enter a valid whole number for the headcount");
       return;
     }
-    if (!activeScope.roomId && !activeScope.classId) {
+    if (!headcountAvailable) {
       toast.error("Pick a room or class scope to record a headcount against");
       return;
     }
@@ -511,6 +553,7 @@ export function VolunteerDashboard({
       if (activeScope.programId) params.set("programId", activeScope.programId);
       if (activeScope.classId) params.set("classId", activeScope.classId);
       if (activeScope.roomId) params.set("roomId", activeScope.roomId);
+      if (activeScope.eventId) params.set("eventId", activeScope.eventId);
       params.set("dateFrom", reportFrom);
       params.set("dateTo", reportTo);
       const res = await fetch(`/api/volunteer/report?${params.toString()}`, {
@@ -528,7 +571,7 @@ export function VolunteerDashboard({
     } finally {
       setReportLoading(false);
     }
-  }, [activeScope.programId, activeScope.classId, activeScope.roomId, reportFrom, reportTo]);
+  }, [activeScope.programId, activeScope.classId, activeScope.roomId, activeScope.eventId, reportFrom, reportTo]);
 
   useEffect(() => {
     // Auto-load when the user opens the Reports tab if we haven't loaded yet.
@@ -540,6 +583,7 @@ export function VolunteerDashboard({
     if (activeScope.programId) params.set("programId", activeScope.programId);
     if (activeScope.classId) params.set("classId", activeScope.classId);
     if (activeScope.roomId) params.set("roomId", activeScope.roomId);
+    if (activeScope.eventId) params.set("eventId", activeScope.eventId);
     params.set("dateFrom", reportFrom);
     params.set("dateTo", reportTo);
     params.set("format", "csv");
@@ -613,24 +657,35 @@ export function VolunteerDashboard({
             Choose a scope
           </CardTitle>
           <CardDescription>
-            Pick which program / class / room to view. The roster, headcount and report tabs all use this scope.
+            Pick what to view — All (every checked-in child), a Program, {t("group").toLowerCase()}, {t("room").toLowerCase()}, or an Event. The roster, headcount and report tabs all use this scope.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">Scope by</Label>
-              <Select value={scopeKind} onValueChange={(v) => setScopeKind(v as "program" | "class" | "room")}>
+              <Select value={scopeKind} onValueChange={(v) => setScopeKind(v as "all" | "program" | "class" | "room" | "event")}>
                 <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="program">{t("family") === "Family" ? "Program" : "Program"}</SelectItem>
+                  <SelectItem value="all">All (whole org)</SelectItem>
+                  <SelectItem value="program">Program</SelectItem>
                   <SelectItem value="class">{t("group")}</SelectItem>
                   <SelectItem value="room">{t("room")}</SelectItem>
+                  <SelectItem value="event">Event</SelectItem>
                 </SelectContent>
               </Select>
             </div>
+
+            {scopeKind === "all" && (
+              <div className="space-y-1.5 sm:col-span-2 lg:col-span-3">
+                <Label className="text-xs text-muted-foreground">Scope</Label>
+                <div className="flex items-center h-9 px-3 rounded-md border bg-muted/30 text-sm text-muted-foreground">
+                  All currently-checked-in children across the org for the selected date.
+                </div>
+              </div>
+            )}
 
             {scopeKind === "program" && (
               <div className="space-y-1.5">
@@ -688,6 +743,32 @@ export function VolunteerDashboard({
               </div>
             )}
 
+            {scopeKind === "event" && (
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label className="text-xs text-muted-foreground">Event</Label>
+                {scopeOptions.events.length === 0 ? (
+                  <div className="flex items-center h-9 px-3 rounded-md border bg-muted/30 text-sm text-muted-foreground">
+                    No upcoming active events. Create one in Admin → Events.
+                  </div>
+                ) : (
+                  <Select value={eventId} onValueChange={setEventId}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select event" />
+                    </SelectTrigger>
+                    <SelectContent className="max-h-72">
+                      {scopeOptions.events.map((e) => (
+                        <SelectItem key={e.id} value={e.id}>
+                          {e.name}
+                          {` · ${new Date(e.date).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" })}`}
+                          {e.programName ? ` · ${e.programName}` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+            )}
+
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">Date</Label>
               <Input
@@ -731,6 +812,8 @@ export function VolunteerDashboard({
                   <Badge variant="secondary">{systemCount}</Badge>
                 </CardTitle>
                 <CardDescription className="text-xs">
+                  {scopeKind === "all" && `All (whole org) scope`}
+                  {scopeKind === "event" && activeScope.eventId && `Event scope`}
                   {activeScope.programId && `Program scope`}
                   {activeScope.classId && `${t("group")} scope`}
                   {activeScope.roomId && `${t("room")} scope`}
@@ -808,9 +891,13 @@ export function VolunteerDashboard({
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {!activeScope.roomId && !activeScope.classId ? (
+              {!headcountAvailable ? (
                 <div className="text-sm text-muted-foreground">
-                  Select a {t("room").toLowerCase()} or {t("group").toLowerCase()} scope above to record a headcount.
+                  {scopeKind === "all"
+                    ? `Headcounts are keyed to a specific room or class. Switch scope to ${t("room").toLowerCase()} or ${t("group").toLowerCase()} to record one.`
+                    : scopeKind === "event"
+                      ? "Headcounts aren't supported for the Event scope (events have ad-hoc rooms). Switch to a room or class scope to record one."
+                      : `Select a ${t("room").toLowerCase()} or ${t("group").toLowerCase()} scope above to record a headcount.`}
                 </div>
               ) : (
                 <>
@@ -1005,7 +1092,50 @@ export function VolunteerDashboard({
                   </Button>
                   <Button
                     variant="outline"
-                    onClick={() => toast.success("Email sent (stub — real email arrives in a later stage)")}
+                    onClick={async () => {
+                      const to = window.prompt(
+                        "Email the attendance report to:",
+                        "",
+                      );
+                      if (!to) return;
+                      toast.info("Sending report email…");
+                      try {
+                        const res = await fetch("/api/admin/reports/email", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            reportType: "attendance",
+                            to,
+                            format: "csv",
+                            params: {
+                              programId: activeScope.programId || undefined,
+                              classId: activeScope.classId || undefined,
+                              roomId: activeScope.roomId || undefined,
+                              eventId: activeScope.eventId || undefined,
+                              dateFrom: reportFrom,
+                              dateTo: reportTo,
+                            },
+                          }),
+                        });
+                        const data = (await res.json().catch(() => ({}))) as {
+                          ok?: boolean;
+                          error?: string;
+                        };
+                        if (res.status === 409 || data.error === "smtp_not_configured") {
+                          toast.error("SMTP not configured", {
+                            description: "Configure SMTP in Settings → Email first.",
+                          });
+                        } else if (!res.ok || !data.ok) {
+                          toast.error("Could not send email", {
+                            description: data.error ?? "Try again or check SMTP settings.",
+                          });
+                        } else {
+                          toast.success("Report emailed to " + to);
+                        }
+                      } catch {
+                        toast.error("Could not send email");
+                      }
+                    }}
                     disabled={reportItems.length === 0}
                   >
                     <Mail className="h-4 w-4" />

@@ -20,7 +20,7 @@ All variables can be set in the `.env` file (next to the binary, or in the
 
 | Variable | Example | Purpose |
 |---|---|---|
-| `CHILDCHECK_DATA_KEY` | `d4e5f6...` (64 hex chars) | 32-byte hex AES-256-GCM key used to encrypt photos at rest + to seal backup bundles. Generate with `openssl rand -hex 32`. If unset, falls back to an all-zeros dev key (DO NOT leave unset in production). **Losing this key means existing photos + encrypted backups cannot be decrypted.** |
+| `CHILDCHECK_DATA_KEY` | `d4e5f6...` (64 hex chars) | 32-byte hex AES-256-GCM key used to encrypt photos at rest + to seal backup bundles + to encrypt the SMTP password stored in the database. Generate with `openssl rand -hex 32`. If unset, falls back to an all-zeros dev key (DO NOT leave unset in production). **Losing this key means existing photos + encrypted backups + the stored SMTP password cannot be decrypted.** |
 
 ### Optional (with defaults)
 
@@ -35,6 +35,58 @@ All variables can be set in the `.env` file (next to the binary, or in the
 | `CHILDCHECK_DB_DIR` | `./db` | Where the SQLite database file lives (only used by the native binary launcher). |
 | `REALTIME_INTERNAL_KEY` | `childcheck-internal-dev` | Shared secret for the internal `/broadcast` endpoint on the realtime mini-service. The Next.js app uses it to fan out check-in/out + headcount updates to connected clients. Set to a strong random value in production. |
 | `NODE_ENV` | `production` | Next.js runtime mode. Leave as `production`. |
+
+### SMTP (outbound email — env-var path)
+
+The admin UI is the runtime-editable path for SMTP config (`/admin/settings` →
+"Email" tab). When the environment variables below are set, they take
+**precedence over the database row** — useful for shipping a deploy with SMTP
+baked in via env (no admin UI interaction needed). When env vars are present,
+the Email tab in `/admin/settings` shows an "SMTP environment variables are
+set" banner so the admin knows why their saved changes appear to be ignored.
+
+| Variable | Example | Purpose |
+|---|---|---|
+| `SMTP_HOST` | `smtp.gmail.com` | SMTP server hostname. When set, env overrides DB. |
+| `SMTP_PORT` | `587` | SMTP port (587 = StartTLS, 465 = SSL, 25 = none). Defaults to 587 if unset. |
+| `SMTP_USER` | `you@gmail.com` | SMTP auth username (usually the full email address). |
+| `SMTP_PASS` | `abcd efgh ijkl mnop` | SMTP password. For Gmail this MUST be an **App Password**, not the account password (see below). |
+| `SMTP_FROM` | `ChildCheck <you@gmail.com>` | From address. Either `"Name <addr>"` or just `addr`. |
+| `SMTP_SECURITY` | `starttls` | One of `starttls` / `ssl` / `none`. If unset, derived from `SMTP_PORT` (465 → ssl, 25 → none, else starttls). |
+
+> 💡 When env vars are set, the SMTP password is NOT stored in the database
+> (it lives in the env file only). When the admin configures SMTP via the UI
+> instead, the password IS stored in the database — AES-256-GCM encrypted
+> with `CHILDCHECK_DATA_KEY`.
+
+#### Gmail App Password requirement
+
+Gmail does not accept the account password for SMTP. You must:
+
+1. Enable **2-Step Verification** on the Google account
+   ([myaccount.google.com/security](https://myaccount.google.com/security)).
+2. Create an **App Password** at
+   [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
+   — select "Mail" + the device, then copy the 16-character password.
+3. Paste it into `SMTP_PASS` (env) or the "Password" field in
+   `/admin/settings` → "Email" tab.
+
+Other hosted providers (Outlook, Yahoo, etc.) follow the same pattern —
+check their docs for the equivalent "App Password" / "SMTP auth password"
+flow. Self-hosted SMTP servers (Postfix, Exim, etc.) use the regular mailbox
+password.
+
+#### What email features use SMTP
+
+- **Report emailing** — the "Email" button on `/admin/reports` sends a CSV
+  attachment. Returns a `smtp_not_configured` error (HTTP 409) if SMTP is
+  off; the UI shows "Configure SMTP in Settings → Email first".
+- **Password recovery** — gated behind the `email_recovery` feature flag
+  (default OFF). When ON + SMTP configured, `/api/auth/forgot-password`
+  will email a reset link (currently a stub — see code comments).
+- **Email as contact method** — the `email_as_contact` flag (default ON)
+  controls whether email is stored on Person records. Independent of SMTP
+  sending.
 
 ## Data directories
 
@@ -116,6 +168,12 @@ Once the first admin is created, `/setup` redirects to `/`.
   audit_log_detailed, scheduled_backups.
 - **Calendar**: `/admin/settings` → "Calendar & Codes" tab. Week-starts-on
   (Sun/Mon/Sat) + daily code format (length + charset).
+- **SMTP / email**: `/admin/settings` → "Email" tab. Configure outbound SMTP
+  (host, port, security, username, password, from-address). Password is
+  stored AES-256-GCM encrypted at rest. "Send test email" validates the
+  config. Alternatively set `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` /
+  `SMTP_PASS` / `SMTP_FROM` env vars (overrides the DB row). Gmail requires
+  an App Password (see [Gmail App Password requirement](#gmail-app-password-requirement)).
 
 ## Adding more users
 
@@ -136,16 +194,50 @@ See [Backup & restore](./backup-restore.md). The short version:
 
 ## Reverse proxy
 
-For TLS termination, put Caddy/Nginx in front. See the per-platform docs:
+For TLS termination, put Caddy/Nginx in front. **TLS is opt-in** — both the
+native install scripts and the bundled `docker-compose.yml` default to plain
+HTTP (useful for trusted-LAN deployments or when you already have a reverse
+proxy in front).
 
-- Docker: [docker.md → TLS reverse proxy](./docker.md#tls-reverse-proxy)
-- Linux: use Caddy/Nginx with `proxy_pass http://localhost:3000`.
-- macOS: use Caddy (via `brew install caddy`) or Nginx.
-- Windows: use [Caddy for Windows](https://caddyserver.com/docs/install) or IIS ARR.
-- Synology: use DSM's built-in reverse proxy (no extra software needed).
+### Native install scripts (`--tls` / `-Tls` flag)
+
+| Platform | Flag |
+|---|---|
+| Linux | `sudo bash install/install-linux.sh --tls` |
+| macOS | `bash install/install-macos.sh --tls` |
+| Windows | `.\install\install-windows.ps1 -Tls` |
+| Synology NAS | `bash install/install-nas-synology.sh --tls` (prints DSM reverse-proxy instructions + copies Caddyfile templates for Docker-on-NAS) |
+
+Each script prompts for a domain name (blank = LAN-only self-signed via
+Caddy's internal CA). On `--tls`/`-Tls` it installs + configures Caddy,
+opens firewall ports 80/443, rewrites `NEXTAUTH_URL` to `https://`, and
+enables the `caddy` service alongside ChildCheck.
+
+### Docker (`--profile tls`)
+
+```bash
+# Default — plain HTTP (no Caddy container starts):
+docker compose up -d
+
+# Opt-in HTTPS — auto-Let's-Encrypt for a real domain:
+DOMAIN=childcheck.myorg.org docker compose --profile tls up -d
+
+# Opt-in HTTPS — LAN-only (no domain — self-signed via Caddy's internal CA):
+cp docker/Caddyfile.lan docker/Caddyfile     # one-time swap
+docker compose --profile tls up -d
+```
+
+See:
+- Docker: [docker.md → TLS termination with Caddy (opt-in)](./docker.md#tls-termination-with-caddy-opt-in)
+- Linux: use the `--tls` flag of `install/install-linux.sh` (or set up Caddy/Nginx manually with `proxy_pass http://localhost:3000`).
+- macOS: use the `--tls` flag of `install/install-macos.sh` (or `brew install caddy` + manual config).
+- Windows: use the `-Tls` switch of `install/install-windows.ps1` (or install [Caddy for Windows](https://caddyserver.com/docs/install) manually).
+- Synology: use the `--tls` flag of `install/install-nas-synology.sh` (it walks you through DSM's built-in reverse proxy, which is the preferred path on bare-metal DSM), or use Docker-on-NAS with `docker compose --profile tls up -d`.
 
 > ⚠️ Make sure to set `NEXTAUTH_URL` to the HTTPS URL once TLS is in place,
-> otherwise session cookies won't be marked `Secure`.
+> otherwise session cookies won't be marked `Secure`. Note: `Secure` cookies
+> only travel over HTTPS — if you browse to `http://...`, the cookie's
+> `Secure` flag is silently dropped.
 
 ## Security checklist (production)
 
