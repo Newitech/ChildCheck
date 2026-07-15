@@ -247,36 +247,28 @@ This document compares the most common open-source licenses, with pros/cons for 
 
 ---
 
-## My Recommendation for ChildCheck
+## Decision: **AGPL-3.0-or-later** ✅
 
-Given that ChildCheck is:
-- A **self-hosted web application** (not a library)
-- Targeted at **churches, clubs, schools** (non-technical users, non-profit)
-- Handling **sensitive child data** (security matters more than licensing philosophy)
-- You want a **public repo** for transparency + community contributions
-- You may want to **offer commercial support or hosting** later
+After reviewing the options above, ChildCheck is licensed under the
+**GNU Affero General Public License v3.0** (AGPL-3.0-or-later).
 
-### Recommended: **Apache 2.0** (or MIT)
+**Rationale:**
+- ChildCheck is a **self-hosted web application** — the AGPL network clause
+  ensures anyone hosting a modified version as a service must share their
+  changes with users.
+- The project is targeted at **churches, clubs, and schools** that self-host.
+  Since the user IS the network user, the AGPL's source-disclosure
+  requirement adds no practical burden — they already have the source.
+- This prevents commercial SaaS forks from closing off improvements.
+- All of ChildCheck's dependencies are permissively licensed (MIT or Apache),
+  so AGPL compatibility is not an issue.
 
-**Apache 2.0** is my top pick because:
-1. **Permissive** — churches/orgs can use it without legal concerns. No "viral" copyleft scaring anyone.
-2. **Patent protection** — important for a system handling child data; defends against patent trolls.
-3. **Enterprise-friendly** — if a large church network or school district wants to deploy it, their legal team will be comfortable with Apache 2.0 (many ban GPL/AGPL).
-4. **Dual-licensing friendly** — if you later want a paid "enterprise" version with closed-source additions, Apache 2.0 (with a CLA) lets you do that. GPL/AGPL makes it much harder.
-5. **Well-understood** — every legal team knows Apache 2.0. No surprises.
-
-**MIT** is the runner-up — simpler but no patent protection. For a project handling child data, the patent clause is worth having.
-
-**GPL/AGPL** would be the choice if your primary goal is ensuring all derivatives stay open-source + preventing commercial forks. But for a church-focused project where adoption + trust matter more than copyleft ideology, permissive is better.
-
-### If you choose Apache 2.0, the changes needed:
-1. Replace `LICENSE` (currently MIT) with the Apache 2.0 full text.
-2. Add a `NOTICE` file with attribution.
-3. Add a `CONTRIBUTING.md` clause about the CLA (optional but recommended).
-4. Update `README.md` to say "Apache 2.0" instead of "MIT".
-
-### If you keep MIT:
-No changes needed — the LICENSE file is already MIT.
+### Changes applied:
+1. ✅ Replaced `LICENSE` with the canonical AGPL-3.0 full text + copyright notice.
+2. ✅ Added `"license": "AGPL-3.0-or-later"` to `package.json`.
+3. ✅ Updated `README.md` (was already correct).
+4. ✅ Updated `CONTRIBUTING.md` CLA to reference AGPL-3.0.
+5. ✅ Updated `docs/deployment/*` and `install/*` scripts to reference AGPL-3.0.
 
 ---
 

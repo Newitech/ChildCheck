@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { BrandMark } from "@/components/domain/brand-mark";
 import { InstallPrompt } from "@/components/domain/install-prompt";
+import { ThemeToggle } from "@/components/domain/theme-toggle";
 import { getOrgConfig, t } from "@/lib/branding";
 import { db } from "@/lib/db";
 
@@ -37,6 +38,7 @@ export default async function Home() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <ThemeToggle />
             <Button asChild size="sm" className="hidden sm:inline-flex">
               <Link href="/login">Sign in</Link>
             </Button>
@@ -90,21 +92,21 @@ export default async function Home() {
                 tone="primary"
               />
               <PortalCard
-                href="/login"
+                href="/guardian"
                 icon={Users}
                 title="Guardian"
                 desc="Carers & authorised guardians manage their family, PIN, and authorised collectors."
                 cta="Guardian area"
               />
               <PortalCard
-                href="/login"
+                href="/login?callback=/volunteer"
                 icon={LayoutDashboard}
                 title="Volunteer"
                 desc="Live room rosters, headcounts, manual check-out and session reports."
                 cta="Volunteer dashboard"
               />
               <PortalCard
-                href="/login"
+                href="/login?callback=/admin"
                 icon={ShieldCheck}
                 title="Admin"
                 desc="People, families, programs, classes, branding, feature toggles, backups."
@@ -126,7 +128,7 @@ export default async function Home() {
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
               <Feature icon={ShieldCheck} title="Authorised guardians" desc="Add grandparents, aunts & uncles who may sign children in/out — without edit rights on the family. Maintain a blacklist of blocked collectors." />
               <Feature icon={Lock} title="Security roles" desc="Admin, Security, Teacher, Volunteer, Kiosk & People-Manager roles — all linked from People records, sharing one set of credentials." />
-              <Feature icon={ScanLine} title="Daily 3-digit code" desc="Each family gets a random code at check-in for lightning-fast, secure check-out. Visible to every authorised carer who signs in." />
+              <Feature icon={ScanLine} title="Daily code" desc="Each family gets a random code at check-in for lightning-fast, secure check-out. Visible to every authorised carer who signs in." />
               <Feature icon={Printer} title="Labels & code slips" desc="Optional name labels for children and signout-code slips — printed to the right queue for each room." />
               <Feature icon={HeartPulse} title="Allergy & medical alerts" desc="Critical alerts surface on the kiosk the moment a child is selected. Visibility scoped by role." />
               <Feature icon={LayoutDashboard} title="Multi-room check-in" desc="Sign siblings into different classes in one action — tick-boxes, not drop-downs." />

@@ -34,10 +34,9 @@ export default async function PersonDetailPage({
           username: true,
           status: true,
           lastLoginAt: true,
-          pinHash: true,
-          roles: { select: { role: true } },
         },
       },
+      roles: { select: { role: true } },
       familyMemberships: {
         include: { family: { select: { id: true, familyName: true, isActive: true } } },
       },
@@ -57,8 +56,8 @@ export default async function PersonDetailPage({
         lastLoginAt: person!.user.lastLoginAt
           ? person!.user.lastLoginAt.toISOString()
           : null,
-        hasPin: !!person!.user.pinHash,
-        roles: person!.user.roles.map((r) => r.role),
+        hasPin: !!person!.pinHash,
+        roles: person!.roles.map((r) => r.role),
       }
     : null;
 
@@ -92,6 +91,7 @@ export default async function PersonDetailPage({
         initial={{
           id: person!.id,
           firstName: person!.firstName,
+          middleName: person!.middleName,
           lastName: person!.lastName,
           preferredName: person!.preferredName,
           personType: person!.personType,
@@ -114,6 +114,8 @@ export default async function PersonDetailPage({
           createdAt: person!.createdAt.toISOString(),
           updatedAt: person!.updatedAt.toISOString(),
           hasUser: !!person!.user,
+          hasPin: !!person!.pinHash,
+          roles: person!.roles.map((r) => r.role),
           familyMemberships: person!.familyMemberships.map((m) => ({
             familyId: m.family.id,
             familyName: m.family.familyName,

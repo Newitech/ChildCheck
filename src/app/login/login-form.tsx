@@ -72,9 +72,10 @@ export function LoginForm() {
         setSubmitting(false);
         return;
       }
-      // On success, push to /admin — the admin layout re-routes
-      // non-admin/PM/security roles to /volunteer or /kiosk appropriately.
-      const dest = res.url && !res.url.includes("error") ? "/admin" : "/admin";
+      // On success, redirect to the callback URL (defaults to /admin).
+      // The Volunteer card sets ?callback=/volunteer so admins/teachers
+      // land on the volunteer dashboard instead of the admin console.
+      const dest = callbackUrl || "/admin";
       router.push(dest);
       router.refresh();
     } catch (err) {

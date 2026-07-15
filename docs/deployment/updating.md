@@ -28,16 +28,20 @@ explicit, operator-initiated action that can be rolled back.
 
 ### Enabling the in-app update checker
 
-The checker is **disabled by default**. Enable it by setting the
-`CHILDCHETECK_UPDATE_REPO` env var to the public ChildCheck GitHub repo:
+The checker is **enabled by default** and points at the public
+`Newitech/ChildCheck` GitHub repo. Override it with the
+`CHILDCHECK_UPDATE_REPO` env var (e.g. to point at a fork, or to disable
+checking for an air-gapped install):
 
 ```bash
 # .env (native) or docker-compose.yml environment (Docker)
-CHILDCHETECK_UPDATE_REPO=childcheck/childcheck
+CHILDCHECK_UPDATE_REPO=Newitech/ChildCheck
 ```
 
-Leave it unset to disable update checking entirely (the Updates card will show
-"Update checking is disabled").
+The checker is enabled by default (pointing at the public `Newitech/ChildCheck`
+repo). To disable it — e.g. for an air-gapped install — set it to `off`,
+`disabled`, `none`, or `0` (the Updates card will then show "Update checking
+has been turned off"). Set it to any `owner/repo` slug to check a fork.
 
 The checker fetches `https://api.github.com/repos/<repo>/releases/latest` with
 no authentication (public repos only). Results are cached in-memory for 1 hour
@@ -96,7 +100,7 @@ service, and waits for the health endpoint.
 sudo bash /opt/childcheck/install/childcheck-update.sh
 
 # Or download + run from anywhere:
-curl -fsSL https://github.com/childcheck/childcheck/raw/main/install/childcheck-update.sh \
+curl -fsSL https://github.com/Newitech/ChildCheck/raw/main/install/childcheck-update.sh \
   | sudo bash
 
 # Pin a specific version:
@@ -132,7 +136,7 @@ Flags:
 | Flag | Purpose |
 |---|---|
 | `--version vX.Y.Z` | Pin a specific version (default: latest release). |
-| `--repo childcheck/childcheck` | Override the GitHub repo slug. |
+| `--repo Newitech/ChildCheck` | Override the GitHub repo slug. |
 | `--dir /opt/childcheck` | Override the install dir (skip auto-detect). |
 | `--health-url URL` | Override the health endpoint (default: `http://localhost:3000/api/config`). |
 | `--service-name NAME` | Override the systemd unit name (default: `childcheck`). |
@@ -238,13 +242,13 @@ To stay on a specific version instead of always tracking `latest`:
 
 - **Docker**: pin the image tag in `docker-compose.yml`:
   ```yaml
-  image: ghcr.io/childcheck/childcheck:v1.2.0
+  image: ghcr.io/newitech/childcheck:v1.2.0
   ```
   Then `docker compose up -d` (no `pull`).
 - **Native**: pass `--version v1.2.0` to `install/childcheck-update.sh`, or
   download the specific release tarball from GitHub:
   ```
-  https://github.com/childcheck/childcheck/releases/tag/v1.2.0
+  https://github.com/Newitech/ChildCheck/releases/tag/v1.2.0
   ```
 
 ## Schema migrations

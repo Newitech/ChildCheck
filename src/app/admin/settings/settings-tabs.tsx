@@ -39,26 +39,59 @@ function hashToTab(hash: string): TabValue {
 }
 
 export function SettingsTabs() {
-  // Lazy initial state: read the hash once on first client render so we open
-  // the right tab immediately (no flash + no setState-in-effect).
-  const [tab, setTab] = useState<TabValue>(() => {
-    if (typeof window === "undefined") return "branding";
-    return hashToTab(window.location.hash);
-  });
+  // Always start on "branding" so the server-rendered HTML matches the first
+  // client render (this page is force-dynamic + auth-gated, so it's SSR'd).
+  // The hash is read AFTER mount in the effect below — reading it in a lazy
+  // useState initializer is fragile under Next App Router client-side nav,
+  // where window.location.hash isn't committed yet at mount time, which left
+  // the tab stuck on Branding for hash deep-links like #cat-kiosk.
+  const [tab, setTab] = useState<TabValue>("branding");
 
   useEffect(() => {
-    // If the hash is a category anchor inside the flags tab, the element may
-    // not have been mounted when the browser first tried to scroll (shadcn Tabs
-    // unmount inactive content). The lazy initial state above has now mounted
-    // the flags tab, so scroll to the anchor.
     if (typeof window === "undefined") return;
+
+    const apply = (): void => {
+      const h = window.location.hash;
+      setTab(hashToTab(h));
+    };
+
+    // Activate the right tab for the current hash now that the URL is settled.
+    apply();
+
+    // shadcn Tabs unmount inactive content, so a #cat-<slug> anchor won't exist
+    // in the DOM until AFTER the flags tab renders (one rAF after setTab).
+    // Also, FlagsForm fetches its data async and shows a spinner until then,
+    // so the anchor may still be absent on the first frame — retry a few times.
+    const scrollToCat = (hash: string): void => {
+      let tries = 0;
+      const attempt = (): void => {
+        const el = document.querySelector(hash);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "start" });
+          return;
+        }
+        if (++tries < 30) requestAnimationFrame(attempt); // ~0.5s @ 60fps
+      };
+      attempt();
+    };
+
     const h = window.location.hash;
     if (h.startsWith("#cat-")) {
-      requestAnimationFrame(() => {
-        const el = document.querySelector(h);
-        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-      });
+      // Wait one frame for the flags tab to mount before scrolling.
+      requestAnimationFrame(() => scrollToCat(h));
     }
+
+    // Keep the tab in sync if the hash changes while already on this page
+    // (e.g. clicking the in-page category chips, or another deep-link).
+    const onHashChange = (): void => {
+      apply();
+      const nh = window.location.hash;
+      if (nh.startsWith("#cat-")) {
+        requestAnimationFrame(() => scrollToCat(nh));
+      }
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
   return (

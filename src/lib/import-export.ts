@@ -230,7 +230,7 @@ export function parsePersonRow(
       middleName,
       lastName,
       preferredName,
-      personType,
+      personType: personType as PersonType,
       email,
       phone,
       dateOfBirth,

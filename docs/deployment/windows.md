@@ -24,8 +24,8 @@ as the service wrapper.
 ### Option A — clone + run locally
 
 ```powershell
-git clone https://github.com/childcheck/childcheck.git
-cd childcheck
+git clone https://github.com/Newitech/ChildCheck.git
+cd ChildCheck
 .\install\install-windows.ps1
 ```
 

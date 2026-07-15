@@ -6,6 +6,8 @@ import { getCurrentUser, hasPermission } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { isFeatureEnabled } from "@/lib/feature-flags";
 import { toPersonListDTO } from "@/lib/people";
+import { hashPin } from "@/lib/password";
+import { setPersonRoles, RolesRequireLoginError } from "@/lib/person-roles";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +35,19 @@ const createSchema = z.object({
   emergencyContactName: z.string().trim().max(120).optional().nullable(),
   emergencyContactPhone: z.string().trim().max(60).optional().nullable(),
   isVisitor: z.boolean().default(false),
+  // Optional one-shot: set an initial guardian PIN + staff roles, and/or link
+  // the new person to a family with a membership role.
+  pin: z
+    .string()
+    .regex(/^\d{4,6}$/)
+    .optional()
+    .nullable(),
+  roles: z.array(z.string()).optional(),
+  familyId: z.string().max(60).optional().nullable(),
+  familyRole: z
+    .enum(["PrimaryCarer", "AuthorisedGuardian", "Child"])
+    .optional()
+    .nullable(),
 });
 
 function nullIfEmpty(v: string | null | undefined): string | null {
@@ -62,6 +77,7 @@ export async function GET(req: Request) {
   const q = (url.searchParams.get("q") ?? "").trim();
   const personType = url.searchParams.get("personType");
   const visitorParam = url.searchParams.get("isVisitor");
+  const role = url.searchParams.get("role");
   const includeInactive = url.searchParams.get("includeInactive") === "true";
   const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1", 10) || 1);
   const pageSize = Math.min(
@@ -83,6 +99,9 @@ export async function GET(req: Request) {
 
   if (visitorParam === "true") where.AND.push({ isVisitor: true });
   if (visitorParam === "false") where.AND.push({ isVisitor: false });
+
+  // Filter by assigned PersonRole (powers the Users-page role-group view).
+  if (role) where.AND.push({ roles: { some: { role } } });
 
   if (q) {
     where.AND.push({
@@ -162,9 +181,61 @@ export async function POST(req: Request) {
       emergencyContactName: nullIfEmpty(p.emergencyContactName),
       emergencyContactPhone: nullIfEmpty(p.emergencyContactPhone),
       isVisitor: p.isVisitor,
+      // Optional initial guardian PIN (lives on Person).
+      pinHash: p.pin ? await hashPin(p.pin) : undefined,
       createdById: user.id,
     },
   });
+
+  // Optional: assign staff roles (enforces Admin/PM-requires-login). A newly
+  // created person has no login yet, so Admin/PM will throw here.
+  if (p.roles && p.roles.length > 0) {
+    try {
+      await setPersonRoles({
+        personId: created.id,
+        roles: p.roles,
+        actorUserId: user.id,
+      });
+    } catch (e) {
+      if (e instanceof RolesRequireLoginError) {
+        return NextResponse.json({ error: e.message }, { status: 400 });
+      }
+      throw e;
+    }
+  }
+
+  // Optional: link to a family with a membership role.
+  if (p.familyId && p.familyRole) {
+    const family = await db.family.findUnique({ where: { id: p.familyId } });
+    if (!family) {
+      return NextResponse.json(
+        { error: "family not found" },
+        { status: 400 },
+      );
+    }
+    if (p.familyRole === "AuthorisedGuardian" && created.personType !== "Adult") {
+      return NextResponse.json(
+        { error: "AuthorisedGuardian requires an Adult person" },
+        { status: 400 },
+      );
+    }
+    await db.familyMember.create({
+      data: { familyId: p.familyId, personId: created.id, role: p.familyRole },
+    });
+    await logAudit({
+      actorUserId: user.id,
+      action: "family.member.add",
+      entity: "FamilyMember",
+      entityId: created.id,
+      details: {
+        familyId: p.familyId,
+        familyName: family.familyName,
+        personId: created.id,
+        personName: `${created.firstName} ${created.lastName}`,
+        role: p.familyRole,
+      },
+    });
+  }
 
   await logAudit({
     actorUserId: user.id,
@@ -176,6 +247,9 @@ export async function POST(req: Request) {
       lastName: created.lastName,
       personType: created.personType,
       isVisitor: created.isVisitor,
+      withPin: !!p.pin,
+      withRoles: p.roles?.length ?? 0,
+      withFamily: !!p.familyId,
     },
   });
 

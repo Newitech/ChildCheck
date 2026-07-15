@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import type { Prisma } from "@prisma/client";
 
 import { db } from "@/lib/db";
 import { getCurrentUser, hasPermission } from "@/lib/auth";
@@ -79,13 +80,13 @@ export async function GET(req: Request) {
   // Build the WHERE clause. If NO scope filter is provided, return ALL
   // check-in records for the date range (the volunteer dashboard's "All"
   // scope).
-  const where: Record<string, unknown> = {
+  const where: Prisma.CheckInRecordWhereInput = {
     checkedInAt: { gte: dateFrom, lt: dateTo },
   };
   if (roomId) where.roomId = roomId;
   if (classId) where.classId = classId;
   if (programId || eventId) {
-    const sessionWhere: Record<string, unknown> = {};
+    const sessionWhere: Prisma.CheckInSessionWhereInput = {};
     if (programId) sessionWhere.programId = programId;
     if (eventId) sessionWhere.eventId = eventId;
     where.checkInSession = sessionWhere;
@@ -121,13 +122,13 @@ export async function GET(req: Request) {
             dateOfBirth: true,
           },
         })
-      : Promise.resolve([]),
+      : Promise.resolve([] as { id: string; firstName: string; lastName: string; allergies: string | null; medicalNotes: string | null; dateOfBirth: Date | null }[]),
     familyIds.length
       ? db.family.findMany({
           where: { id: { in: familyIds } },
           select: { id: true, familyName: true },
         })
-      : Promise.resolve([]),
+      : Promise.resolve([] as { id: string; familyName: string }[]),
   ]);
   const childById = new Map(children.map((c) => [c.id, c]));
   const familyById = new Map(families.map((f) => [f.id, f]));
@@ -152,19 +153,19 @@ export async function GET(req: Request) {
           where: { id: { in: classIds } },
           select: { id: true, name: true, programId: true },
         })
-      : Promise.resolve([]),
+      : Promise.resolve([] as { id: string; name: string; programId: string }[]),
     roomIds.length
       ? db.room.findMany({
           where: { id: { in: roomIds } },
           select: { id: true, name: true },
         })
-      : Promise.resolve([]),
+      : Promise.resolve([] as { id: string; name: string }[]),
     programIds.length
       ? db.program.findMany({
           where: { id: { in: programIds } },
           select: { id: true, name: true },
         })
-      : Promise.resolve([]),
+      : Promise.resolve([] as { id: string; name: string }[]),
   ]);
   const classById = new Map(classes.map((c) => [c.id, c]));
   const roomById = new Map(rooms.map((r) => [r.id, r]));

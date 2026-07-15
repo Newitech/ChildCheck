@@ -77,6 +77,8 @@ export interface Branding {
   primaryColor: string;
   accentColor: string;
   logoUrl: string | null;
+  /** Optional organisation display name (falls back to appName if absent). */
+  organisation?: string;
 }
 
 export interface OrgConfig {

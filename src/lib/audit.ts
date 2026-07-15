@@ -27,6 +27,9 @@ import { db } from "@/lib/db";
 
 export interface AuditEntry {
   actorUserId?: string | null;
+  /// The Person who performed the action when the actor is a guardian (a Person,
+  /// not a User). Set for guardian self-service portal actions; null otherwise.
+  actorPersonId?: string | null;
   action: string;
   entity?: string | null;
   entityId?: string | null;
@@ -87,6 +90,7 @@ export async function logAudit(entry: AuditEntry): Promise<void> {
       const created = await tx.auditLog.create({
         data: {
           actorUserId: entry.actorUserId ?? null,
+          actorPersonId: entry.actorPersonId ?? null,
           action: entry.action,
           entity: entry.entity ?? null,
           entityId: entry.entityId ?? null,

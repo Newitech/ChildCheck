@@ -91,7 +91,7 @@ export function CodeSettingsForm() {
         <div className="grid sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label htmlFor="code-charset">Character set</Label>
-            <Select value={charset} onValueChange={setCharset}>
+            <Select value={charset} onValueChange={(v) => setCharset(v as "alphanumeric" | "numeric")}>
               <SelectTrigger id="code-charset">
                 <SelectValue />
               </SelectTrigger>

@@ -1,0 +1,205 @@
+# =============================================================================
+# ChildCheck — Release workflow.
+#
+# Triggers on tag push matching `v*` (e.g. `v1.0.0`, `v1.1.0-rc1`).
+#
+# What it does:
+#   1. Builds the 4 platform binaries via scripts/build-binaries.sh
+#      (linux-x64, linux-arm64, macos-arm64, windows-x64).
+#   2. Builds + pushes the Docker image to GHCR
+#      (ghcr.io/<org>/childcheck:latest + :<tag>).
+#   3. Creates a GitHub Release with the tag's release notes + attaches the
+#      4 binary tarballs as assets.
+#
+# Prerequisites (one-time setup):
+#   - Set the GHCR_ORG env var below to your GitHub org / username.
+#   - In your repo settings → "Packages" → "Package settings" → make
+#     `childcheck` public (or keep it private if you prefer).
+#   - The GITHUB_TOKEN secret is auto-provided by Actions — no setup needed
+#     for it. (It has write access to GHCR + Releases by default.)
+#
+# To cut a release locally:
+#   git tag -a v1.0.0 -m "Release 1.0.0"
+#   git push origin v1.0.0
+# =============================================================================
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v1.0.0)"
+        required: true
+        type: string
+
+# Cancel any in-flight run for the same tag (defensive).
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # ⚠️ Set this to your GitHub org / username.
+  # The image will be pushed to ghcr.io/<GHCR_ORG>/childcheck.
+  GHCR_ORG: childcheck
+  IMAGE_NAME: childcheck
+
+permissions:
+  contents: write       # to create the GitHub Release + upload assets
+  packages: write       # to push to GHCR
+  id-token: write       # for cosign / OIDC if you add signing later
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Build the 4 native binaries + their tarballs.
+  # ---------------------------------------------------------------------------
+  build-binaries:
+    name: Build binaries (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux-x64, linux-arm64, macos-arm64, windows-x64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build binary (${{ matrix.target }})
+        run: bash scripts/build-binaries.sh ${{ matrix.target }}
+
+      - name: Verify tarball exists
+        run: |
+          set -euo pipefail
+          TARBALL="dist/childcheck-${{ matrix.target }}.tar.gz"
+          if [ ! -f "${TARBALL}" ]; then
+            echo "ERROR: ${TARBALL} not produced"
+            exit 1
+          fi
+          ls -lh "${TARBALL}"
+
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: dist/childcheck-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # 2. Build + push the Docker image to GHCR.
+  # ---------------------------------------------------------------------------
+  build-docker:
+    name: Build + push Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (multi-arch)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image tags
+        id: tags
+        run: |
+          set -euo pipefail
+          # Strip the leading "v" from the tag for the semver label.
+          RAW_TAG="${GITHUB_REF_NAME:-${{ inputs.tag }}}"
+          SEMVER="${RAW_TAG#v}"
+          IMAGE="ghcr.io/${{ env.GHCR_ORG }}/${{ env.IMAGE_NAME }}"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "tag_latest=${IMAGE}:latest" >> "$GITHUB_OUTPUT"
+          echo "tag_semver=${IMAGE}:${SEMVER}" >> "$GITHUB_OUTPUT"
+          echo "tag_sha=${IMAGE}:sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build + push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.tags.outputs.tag_latest }}
+            ${{ steps.tags.outputs.tag_semver }}
+            ${{ steps.tags.outputs.tag_sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ---------------------------------------------------------------------------
+  # 3. Create the GitHub Release + attach the 4 binary tarballs.
+  # ---------------------------------------------------------------------------
+  release:
+    name: Publish GitHub Release
+    needs: [build-binaries, build-docker]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          merge-multiple: true
+          path: dist
+
+      - name: Verify artifacts
+        run: |
+          set -euo pipefail
+          ls -lh dist/
+          for target in linux-x64 linux-arm64 macos-arm64 windows-x64; do
+            if [ ! -f "dist/childcheck-${target}.tar.gz" ]; then
+              echo "ERROR: missing dist/childcheck-${target}.tar.gz"
+              exit 1
+            fi
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name || inputs.tag }}
+          name: ${{ github.ref_name || inputs.tag }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name || inputs.tag, '-') }}
+          files: |
+            dist/childcheck-linux-x64.tar.gz
+            dist/childcheck-linux-arm64.tar.gz
+            dist/childcheck-macos-arm64.tar.gz
+            dist/childcheck-windows-x64.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          cat <<EOF >> "$GITHUB_STEP_SUMMARY"
+          ## Release ${{ github.ref_name || inputs.tag }} published ✅
+
+          - **Binaries**: 4 tarballs attached to the GitHub Release
+            (linux-x64, linux-arm64, macos-arm64, windows-x64).
+          - **Docker image**:
+            \`ghcr.io/${{ env.GHCR_ORG }}/${{ env.IMAGE_NAME }}:${(github.ref_name || inputs.tag) && (github.ref_name || inputs.tag) || 'latest'}\`
+            + \`:latest\` pushed to GHCR.
+          - **Update instructions**: see
+            [docs/deployment/updating.md](https://github.com/${{ env.GHCR_ORG }}/childcheck/blob/main/docs/deployment/updating.md).
+          EOF

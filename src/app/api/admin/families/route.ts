@@ -7,10 +7,39 @@ import { logAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
+const GENDERS = new Set(["Male", "Female", "Other"]);
+
 const createSchema = z.object({
   familyName: z.string().trim().min(1).max(120),
   notes: z.string().max(4000).optional().nullable(),
   memberIds: z.array(z.string().min(1).max(60)).optional(),
+  // Inline creation: brand-new people created + linked as members in one call.
+  newMembers: z
+    .array(
+      z.object({
+        firstName: z.string().trim().min(1).max(80),
+        middleName: z.string().trim().max(80).optional().nullable(),
+        lastName: z.string().trim().min(1).max(80),
+        preferredName: z.string().trim().max(80).optional().nullable(),
+        personType: z.enum(["Adult", "Child"]).default("Adult"),
+        phone: z.string().trim().max(60).optional().nullable(),
+        email: z.string().trim().max(160).optional().nullable(),
+        dateOfBirth: z.string().datetime().optional().nullable(),
+        schoolGrade: z.string().trim().max(40).optional().nullable(),
+        gender: z
+          .string()
+          .refine((v) => v == null || v === "" || GENDERS.has(v))
+          .optional()
+          .nullable(),
+        allergies: z.string().max(2000).optional().nullable(),
+        medicalNotes: z.string().max(4000).optional().nullable(),
+        dietaryNotes: z.string().max(2000).optional().nullable(),
+        emergencyContactName: z.string().trim().max(120).optional().nullable(),
+        emergencyContactPhone: z.string().trim().max(60).optional().nullable(),
+        isVisitor: z.boolean().default(false),
+      }),
+    )
+    .optional(),
 });
 
 function nullIfEmpty(v: string | null | undefined): string | null {
@@ -138,34 +167,69 @@ export async function POST(req: Request) {
     }
   }
 
-  const created = await db.family.create({
-    data: {
-      familyName: p.familyName,
-      notes: nullIfEmpty(p.notes),
-      createdById: user.id,
-      members:
-        memberRows.length > 0
-          ? {
-              create: memberRows.map((m) => ({
-                personId: m.id,
-                role: m.personType === "Child" ? "Child" : "PrimaryCarer",
-              })),
-            }
-          : undefined,
-    },
-    include: { members: true },
+  const created = await db.$transaction(async (tx) => {
+    // Create new people first (so their ids are available for linking).
+    const newMemberRows: { id: string; personType: string }[] = [];
+    for (const nm of p.newMembers ?? []) {
+      const np = await tx.person.create({
+        data: {
+          firstName: nm.firstName,
+          middleName: nullIfEmpty(nm.middleName),
+          lastName: nm.lastName,
+          preferredName: nullIfEmpty(nm.preferredName),
+          personType: nm.personType,
+          phone: nullIfEmpty(nm.phone),
+          email: nullIfEmpty(nm.email),
+          dateOfBirth: nm.dateOfBirth ? new Date(nm.dateOfBirth) : null,
+          schoolGrade: nullIfEmpty(nm.schoolGrade),
+          gender: !nm.gender || nm.gender === "" ? null : nm.gender,
+          allergies: nullIfEmpty(nm.allergies),
+          medicalNotes: nullIfEmpty(nm.medicalNotes),
+          dietaryNotes: nullIfEmpty(nm.dietaryNotes),
+          emergencyContactName: nullIfEmpty(nm.emergencyContactName),
+          emergencyContactPhone: nullIfEmpty(nm.emergencyContactPhone),
+          isVisitor: nm.isVisitor,
+          isActive: true,
+          createdById: user.id,
+        },
+      });
+      newMemberRows.push({ id: np.id, personType: np.personType });
+    }
+
+    const allMembers = [...memberRows, ...newMemberRows];
+
+    const family = await tx.family.create({
+      data: {
+        familyName: p.familyName,
+        notes: nullIfEmpty(p.notes),
+        createdById: user.id,
+        members:
+          allMembers.length > 0
+            ? {
+                create: allMembers.map((m) => ({
+                  personId: m.id,
+                  role: m.personType === "Child" ? "Child" : "PrimaryCarer",
+                })),
+              }
+            : undefined,
+      },
+      include: { members: true },
+    });
+
+    return { family, newMemberRows };
   });
 
   await logAudit({
     actorUserId: user.id,
     action: "family.create",
     entity: "Family",
-    entityId: created.id,
+    entityId: created.family.id,
     details: {
-      familyName: created.familyName,
+      familyName: created.family.familyName,
       memberIds: memberRows.map((m) => m.id),
+      newMemberIds: created.newMemberRows.map((m) => m.id),
     },
   });
 
-  return NextResponse.json({ id: created.id }, { status: 201 });
+  return NextResponse.json({ id: created.family.id }, { status: 201 });
 }

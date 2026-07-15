@@ -35,13 +35,13 @@ sudo -i
 
 #### Option A — one-liner
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/childcheck/childcheck/main/install/install-nas-synology.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Newitech/ChildCheck/main/install/install-nas-synology.sh)"
 ```
 
 #### Option B — download + run
 ```bash
 cd /tmp
-curl -fLO https://raw.githubusercontent.com/childcheck/childcheck/main/install/install-nas-synology.sh
+curl -fLO https://raw.githubusercontent.com/Newitech/ChildCheck/main/install/install-nas-synology.sh
 bash install-nas-synology.sh
 ```
 

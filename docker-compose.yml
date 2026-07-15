@@ -29,7 +29,7 @@ services:
       # Auto-matches the PORT env var from .env (default 3000). To use a
       # different port, just set PORT=3001 in .env — this mapping follows
       # automatically. Also update NEXTAUTH_URL to include the new port.
-      - "${PORT:-3000}:${PORT:-3000}"
+      - "${PORT:-3001}:${PORT:-3000}"
       # Realtime mini-service (Socket.io on REALTIME_PORT). Same rule applies.
       # Exposed for direct debugging; in production the reverse proxy can
       # forward /socket.io/ through the Next.js container's port 3000 instead,
@@ -60,9 +60,10 @@ services:
       # returns the Docker update command (`docker compose pull && up -d`)
       # rather than the native script command.
       CHILDCHECK_DOCKER: "1"
-      # Set CHILDCHETECK_UPDATE_REPO in .env (e.g. "childcheck/childcheck")
-      # to enable the read-only in-app update checker. Leave unset to disable.
-      CHILDCHETECK_UPDATE_REPO: ${CHILDCHETECK_UPDATE_REPO:-}
+      # Update checker: enabled by default (points at the public repo).
+      # Override CHILDCHECK_UPDATE_REPO to point at a fork, or set to
+      # "off"/"disabled"/"none"/"0" to disable for air-gapped installs.
+      CHILDCHECK_UPDATE_REPO: ${CHILDCHECK_UPDATE_REPO:-Newitech/ChildCheck}
 
     volumes:
       # SQLite database (persists across container rebuilds).

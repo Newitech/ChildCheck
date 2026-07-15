@@ -34,31 +34,34 @@ export interface PrintOutcome {
  * Never throws — returns a failed outcome on any error.
  */
 export async function executePrint(result: PrintResult): Promise<PrintOutcome> {
+  // Capture before narrowing so the catch/fallback branches can access them
+  // even after TS narrows `result.method` to `never`.
+  const { method, printerName } = result;
   try {
-    if (result.method === "browser") {
-      return executeBrowserPrint(result.html, result.kind, result.printerName);
+    if (method === "browser") {
+      return executeBrowserPrint(result.html, result.kind, printerName);
     }
-    if (result.method === "qz_tray") {
-      return await executeQzTray(result.payload, result.printerName);
+    if (method === "qz_tray") {
+      return await executeQzTray(result.payload, printerName);
     }
-    if (result.method === "thermal_raw") {
+    if (method === "thermal_raw") {
       return await executeThermalRaw(
         result.commands,
-        result.printerName,
+        printerName,
         result.kind,
       );
     }
     return {
       ok: false,
-      method: "browser",
-      printerName: result.printerName,
+      method,
+      printerName,
       message: "Unknown print method",
     };
   } catch (e) {
     return {
       ok: false,
-      method: result.method,
-      printerName: result.printerName,
+      method,
+      printerName,
       message: e instanceof Error ? e.message : "Print failed",
     };
   }

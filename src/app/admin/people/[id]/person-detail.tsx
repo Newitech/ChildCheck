@@ -671,8 +671,18 @@ export function PersonDetail({ personId, wwccEnabled, userSummary, initial }: Pr
         editing={{
           id: data.id,
           firstName: data.firstName,
+          middleName: data.middleName,
           lastName: data.lastName,
+          preferredName: data.preferredName,
           personType: data.personType,
+          email: data.email,
+          phone: data.phone,
+          isVisitor: data.isVisitor,
+          isActive: data.isActive,
+          hasPhoto: data.hasPhoto,
+          familyCount: data.familyMemberships.length,
+          ageInfo: null,
+          wwccStatusSummary: null,
         }}
         onSaved={() => {
           setEditOpen(false);
@@ -691,13 +701,15 @@ export function PersonDetail({ personId, wwccEnabled, userSummary, initial }: Pr
         <PersonCollectionPermissionsSection personId={personId} />
       )}
 
-      {/* URM — Adult: login account (promote-to-user / manage user) */}
+      {/* URM — Adult: permissions & access (roles + PIN + login) */}
       {data.personType === "Adult" && (
         <PersonUserAccountSection
           personId={personId}
           firstName={data.firstName}
           lastName={data.lastName}
           initial={userSummary}
+          initialHasPin={data.hasPin}
+          initialRoles={data.roles}
         />
       )}
     </div>

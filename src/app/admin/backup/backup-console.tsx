@@ -12,6 +12,7 @@ import {
   FileUp,
   HardDrive,
   Info,
+  KeyRound,
   Loader2,
   RotateCcw,
   ShieldCheck,
@@ -98,6 +99,7 @@ export function BackupConsole() {
   const [items, setItems] = useState<BackupItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [backingUp, setBackingUp] = useState(false);
+  const [exportingKeys, setExportingKeys] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
 
   // Restore state
@@ -231,6 +233,38 @@ export function BackupConsole() {
       setDeleting(null);
     }
   }, [deleting, load]);
+
+  // --- Export encryption keys ---
+  const onExportKeys = useCallback(async () => {
+    setExportingKeys(true);
+    try {
+      const res = await fetch("/api/admin/backup/keys");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error ?? `status ${res.status}`);
+      }
+      const blob = await res.blob();
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objUrl;
+      const cd = res.headers.get("Content-Disposition") ?? "";
+      const m = /filename="?([^";]+)"?/i.exec(cd);
+      a.download = m?.[1] ?? "childcheck-keys.env";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objUrl);
+      toast.success("Encryption keys downloaded", {
+        description: "Store this file securely — without it, backups and photos cannot be restored.",
+      });
+    } catch (e) {
+      toast.error("Failed to export keys", {
+        description: e instanceof Error ? e.message : undefined,
+      });
+    } finally {
+      setExportingKeys(false);
+    }
+  }, []);
 
   // --- Restore flow ---
   const onPickRestoreFile = useCallback((f: File | null) => {
@@ -656,6 +690,39 @@ export function BackupConsole() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Encryption keys export */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <KeyRound className="h-5 w-5" /> Encryption Keys
+          </CardTitle>
+          <CardDescription>
+            Download your encryption keys for safe offline storage. Without
+            <code className="mx-1 font-mono">CHILDCHECK_DATA_KEY</code>,
+            all encrypted photos and backups are <strong>unrecoverable</strong>.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="rounded-md border border-amber-400/50 bg-amber-50 dark:bg-amber-950/30 p-3 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2">
+            <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+            <div>
+              Store the downloaded file in a <strong>secure location</strong> (safe
+              deposit, password manager, etc.). Anyone with these keys can decrypt
+              your data. Do not commit it to version control or leave it on a
+              shared machine.
+            </div>
+          </div>
+          <Button onClick={onExportKeys} disabled={exportingKeys}>
+            {exportingKeys ? (
+              <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+            ) : (
+              <KeyRound className="mr-1.5 h-4 w-4" />
+            )}
+            Download encryption keys (.env)
+          </Button>
+        </CardContent>
+      </Card>
     </div>
   );
 }

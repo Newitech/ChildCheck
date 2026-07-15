@@ -320,7 +320,7 @@ export async function POST(req: Request) {
             id: true,
             firstName: true,
             lastName: true,
-            user: { select: { pinHash: true, status: true } },
+            pinHash: true,
           },
         },
       },
@@ -332,13 +332,11 @@ export async function POST(req: Request) {
       );
     }
     // As an extra defence-in-depth check, also verify that the collector
-    // actually has a pinHash set (so we know PIN verification could have
+    // actually has a PIN set (so we know PIN verification could have
     // succeeded). We don't take the PIN in this API — that's the
-    // guardian-signin endpoint's job.
-    if (
-      !membership.person.user?.pinHash ||
-      membership.person.user.status !== "Active"
-    ) {
+    // guardian-signin endpoint's job. The PIN lives on Person (not User), so a
+    // login account is not required.
+    if (!membership.person.pinHash) {
       return NextResponse.json(
         { error: "forbidden", message: "collector has no PIN set" },
         { status: 403 },

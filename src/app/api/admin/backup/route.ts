@@ -46,7 +46,7 @@ export async function POST(req: Request) {
   // Force "backup now".
   const result = await createBackup(undefined, user.id);
 
-  return new NextResponse(result.buffer, {
+  return new NextResponse(new Uint8Array(result.buffer), {
     status: 200,
     headers: {
       "Content-Type": "application/octet-stream",

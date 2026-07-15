@@ -160,7 +160,7 @@ if [ -n "${SOURCE_PATH}" ]; then
     exit 1
   fi
 else
-  URL_BASE="${CHILDCHECK_URL_BASE:-https://github.com/childcheck/childcheck/releases/download}"
+  URL_BASE="${CHILDCHECK_URL_BASE:-https://github.com/Newitech/ChildCheck/releases/download}"
   VERSION="${CHILDCHECK_VERSION:-latest}"
   if [ -n "${CHILDCHECK_URL:-}" ]; then
     URL="${CHILDCHECK_URL}"

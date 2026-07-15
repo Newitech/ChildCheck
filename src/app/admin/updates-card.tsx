@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactElement } from "react";
 import {
   CheckCircle2,
   Copy,
@@ -53,7 +53,7 @@ interface UpdateStatus {
  * update command for the install type. Read-only: applying an update is
  * always external.
  */
-export function UpdatesCard(): JSX.Element {
+export function UpdatesCard(): ReactElement {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [checking, setChecking] = useState(false);
@@ -125,12 +125,13 @@ export function UpdatesCard(): JSX.Element {
               </span>
             </div>
             <p className="text-xs text-muted-foreground">
-              Set{" "}
+              Update checking has been turned off for this install. To enable,
+              set{" "}
               <code className="px-1 py-0.5 rounded bg-muted font-mono text-[11px]">
                 CHILDCHECK_UPDATE_REPO
               </code>{" "}
-              (e.g. <span className="font-mono">childcheck/childcheck</span>)
-              in your environment to enable.
+              to the repo slug (e.g.{" "}
+              <span className="font-mono">Newitech/ChildCheck</span>).
             </p>
           </div>
         ) : status?.error ? (

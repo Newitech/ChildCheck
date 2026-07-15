@@ -71,7 +71,7 @@ After installing with **any** method, complete the first-run setup wizard:
 
 ## Getting help
 
-- File issues at <https://github.com/childcheck/childcheck/issues>.
+- File issues at <https://github.com/Newitech/ChildCheck/issues>.
 - Before contacting support, gather:
   - The output of `childcheck version` (or `docker logs childcheck` first lines).
   - Your install method + OS.

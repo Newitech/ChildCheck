@@ -104,8 +104,8 @@ export async function POST(req: Request) {
         },
       });
 
-      await tx.userRole.create({
-        data: { userId: created.id, role: "Admin" },
+      await tx.personRole.create({
+        data: { personId: person.id, role: "Admin" },
       });
 
       await tx.auditLog.create({

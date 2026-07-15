@@ -3,8 +3,9 @@ import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { getCurrentUser, ROLE_PERMISSIONS } from "@/lib/auth";
-import { hashPassword, hashPin, isValidPin } from "@/lib/password";
+import { hashPassword } from "@/lib/password";
 import { logAudit } from "@/lib/audit";
+import { setPersonRoles, RolesRequireLoginError } from "@/lib/person-roles";
 
 export const dynamic = "force-dynamic";
 
@@ -25,28 +26,24 @@ const createSchema = z.object({
     .string()
     .min(8, "Password must be at least 8 characters")
     .max(128, "Password is too long (max 128)"),
-  pin: z
-    .string()
-    .trim()
-    .optional()
-    .nullable()
-    .refine((v) => v == null || v === "" || isValidPin(v), {
-      message: "PIN must be 4–6 digits",
-    }),
+  // Optional convenience: assign roles on create. Roles live on PersonRole (not
+  // User), so they're applied via setPersonRoles after the login is created.
   roles: z
     .array(z.string())
+    .optional()
     .refine(
-      (rs) => rs.every((r) => KNOWN_ROLES.includes(r)),
+      (rs) => (rs ?? []).every((r) => KNOWN_ROLES.includes(r)),
       "Unknown role in list",
     ),
 });
 
 /**
- * GET /api/admin/users — list all Users with their Person + roles + status +
+ * GET /api/admin/users — list all login accounts with their Person + status +
  * lastLoginAt. Admin-only. Sorted by Person.lastName asc, then firstName.
  *
- * Returns a safe shape: never includes passwordHash or pinHash. `hasPin` is a
- * boolean derived from the presence of pinHash.
+ * LOGIN-ONLY: roles + PIN moved to Person (PersonRole + Person.pinHash). This
+ * list never returns pinHash/passwordHash. Use /api/admin/people/[id] for a
+ * person's roles + hasPin.
  */
 export async function GET() {
   const user = await getCurrentUser();
@@ -69,7 +66,6 @@ export async function GET() {
           personType: true,
         },
       },
-      roles: { select: { role: true } },
     },
   });
 
@@ -92,7 +88,6 @@ export async function GET() {
       username: u.username,
       status: u.status,
       lastLoginAt: u.lastLoginAt ? u.lastLoginAt.toISOString() : null,
-      hasPin: !!u.pinHash,
       createdAt: u.createdAt.toISOString(),
       person: u.person
         ? {
@@ -104,25 +99,25 @@ export async function GET() {
             personType: u.person.personType,
           }
         : null,
-      roles: u.roles.map((r) => r.role),
     })),
   });
 }
 
 /**
- * POST /api/admin/users — create a new User for an existing Person.
+ * POST /api/admin/users — create a login account for an existing Person.
  *
- * Body: { personId, username, password, pin?, roles: string[] }
+ * Body: { personId, username, password, roles?: string[] }
+ *
+ * LOGIN-ONLY: the User record holds username + password. Optional `roles` are
+ * assigned to the Person via PersonRole (not the User). PIN is NOT set here —
+ * it lives on Person.pinHash and is set via /api/admin/people/[id]/pin.
  *
  * Validation:
  *  - personId must exist + must NOT already have a User (1:1 link).
+ *  - person must be an Adult.
  *  - username 3–64 chars, /^[A-Za-z0-9._-]+$/, unique.
  *  - password min 8.
- *  - pin optional, 4–6 digits (or empty/null).
- *  - roles must all be from the 6 known roles.
- *
- * Hashes password + pin (if provided) and creates User + UserRole rows in a
- * transaction. Audit-logs `user.create`.
+ *  - roles (if present) must all be from the known role set.
  */
 export async function POST(req: Request) {
   const actor = await getCurrentUser();
@@ -142,7 +137,7 @@ export async function POST(req: Request) {
     const firstError = parsed.error.issues[0]?.message ?? "Invalid input";
     return NextResponse.json({ error: firstError }, { status: 400 });
   }
-  const { personId, username, password, pin, roles } = parsed.data;
+  const { personId, username, password, roles } = parsed.data;
 
   // Person must exist and not already have a user account.
   const person = await db.person.findUnique({
@@ -178,31 +173,33 @@ export async function POST(req: Request) {
   }
 
   const passwordHash = await hashPassword(password);
-  const pinHash =
-    pin && pin.length > 0 ? await hashPin(pin) : null;
 
-  const created = await db.$transaction(async (tx) => {
-    const u = await tx.user.create({
-      data: {
-        personId,
-        username,
-        passwordHash,
-        pinHash,
-        status: "Active",
-      },
-    });
-    if (roles.length > 0) {
-      // NOTE: Prisma's SQLite connector does not support `skipDuplicates` on
-      // createMany (it throws PrismaClientValidationError). The schema has a
-      // @@unique([userId, role]) constraint that protects against duplicates,
-      // and we just created the User (no roles yet) so duplicates are
-      // impossible here anyway.
-      await tx.userRole.createMany({
-        data: roles.map((r) => ({ userId: u.id, role: r })),
-      });
-    }
-    return u;
+  const created = await db.user.create({
+    data: {
+      personId,
+      username,
+      passwordHash,
+      status: "Active",
+    },
   });
+
+  // Optional: assign roles to the Person (not the User).
+  if (roles && roles.length > 0) {
+    try {
+      await setPersonRoles({
+        personId,
+        roles,
+        actorUserId: actor.id,
+      });
+    } catch (e) {
+      if (e instanceof RolesRequireLoginError) {
+        // Should not happen here (we just created a login), but roll back if so.
+        await db.user.delete({ where: { id: created.id } });
+        return NextResponse.json({ error: e.message }, { status: 400 });
+      }
+      throw e;
+    }
+  }
 
   await logAudit({
     actorUserId: actor.id,
@@ -212,8 +209,7 @@ export async function POST(req: Request) {
     details: {
       username,
       personId,
-      roles,
-      withPin: !!pinHash,
+      roles: roles ?? [],
     },
   });
 
@@ -223,8 +219,6 @@ export async function POST(req: Request) {
       personId: created.personId,
       username: created.username,
       status: created.status,
-      hasPin: !!pinHash,
-      roles,
     },
     { status: 201 },
   );

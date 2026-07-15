@@ -13,8 +13,8 @@ persistent volumes for the database, uploaded photos, branding, and backups.
 ## 1. Get the source
 
 ```bash
-git clone https://github.com/childcheck/childcheck.git
-cd childcheck
+git clone https://github.com/Newitech/ChildCheck.git
+cd ChildCheck
 ```
 
 You only need the `Dockerfile`, `docker-compose.yml`, `.env.example`, and the

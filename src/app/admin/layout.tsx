@@ -7,6 +7,7 @@ import { BrandMark } from "@/components/domain/brand-mark";
 import { SignOutButton } from "@/components/domain/sign-out-button";
 import { UserMenu } from "@/components/domain/user-menu";
 import { IdleTimeout } from "@/components/domain/idle-timeout";
+import { ThemeToggle } from "@/components/domain/theme-toggle";
 import { Button } from "@/components/ui/button";
 
 export const dynamic = "force-dynamic";
@@ -57,7 +58,8 @@ export default async function AdminLayout({
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
             <UserMenu user={user} />
             <SignOutButton />
           </div>

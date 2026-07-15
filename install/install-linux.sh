@@ -33,7 +33,7 @@
 # Environment variables (optional):
 #   CHILDCHECK_VERSION     Version to download (default: latest)
 #   CHILDCHECK_URL         Direct download URL (overrides version)
-#   CHILDCHECK_URL_BASE    Base URL for downloads (default: https://github.com/childcheck/childcheck/releases/download)
+#   CHILDCHECK_URL_BASE    Base URL for downloads (default: https://github.com/Newitech/ChildCheck/releases/download)
 # =============================================================================
 set -euo pipefail
 
@@ -211,7 +211,7 @@ if [ -n "${SOURCE_PATH}" ]; then
 else
   # Download.
   VERSION="${CHILDCHECK_VERSION:-latest}"
-  URL_BASE="${CHILDCHECK_URL_BASE:-https://github.com/childcheck/childcheck/releases/download}"
+  URL_BASE="${CHILDCHECK_URL_BASE:-https://github.com/Newitech/ChildCheck/releases/download}"
   if [ -n "${CHILDCHECK_URL:-}" ]; then
     URL="${CHILDCHECK_URL}"
   elif [ "${VERSION}" = "latest" ]; then
@@ -379,7 +379,7 @@ step "Writing systemd unit ${SERVICE_FILE}"
 cat > "${SERVICE_FILE}" <<EOF
 [Unit]
 Description=ChildCheck — secure child check-in / check-out
-Documentation=https://github.com/childcheck/childcheck
+Documentation=https://github.com/Newitech/ChildCheck
 After=network.target
 Wants=network-online.target
 

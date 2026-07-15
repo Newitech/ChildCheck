@@ -6,6 +6,7 @@
  * always identical to the JSON / CSV output the dashboard sees.
  */
 
+import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { startOfDayUTC } from "@/lib/daily-code";
 import { isoDay, parseDateParam } from "@/lib/reports-shared";
@@ -55,7 +56,7 @@ export async function attendanceReport(params: AttendanceParams): Promise<Attend
   const dateTo = new Date(dateToRaw);
   dateTo.setUTCDate(dateTo.getUTCDate() + 1);
 
-  const where: Record<string, unknown> = {
+  const where: Prisma.CheckInRecordWhereInput = {
     checkedInAt: { gte: dateFrom, lt: dateTo },
   };
   if (classId) where.classId = classId;
@@ -86,13 +87,13 @@ export async function attendanceReport(params: AttendanceParams): Promise<Attend
           where: { id: { in: classIds } },
           select: { id: true, name: true, programId: true },
         })
-      : Promise.resolve([]),
+      : Promise.resolve([] as { id: string; name: string; programId: string }[]),
     programIds.length
       ? db.program.findMany({
           where: { id: { in: programIds } },
           select: { id: true, name: true },
         })
-      : Promise.resolve([]),
+      : Promise.resolve([] as { id: string; name: string }[]),
   ]);
   const classById = new Map(classes.map((c) => [c.id, c]));
   const programById = new Map(programs.map((p) => [p.id, p]));
@@ -199,7 +200,7 @@ export async function headcountTrendsReport(params: HeadcountParams): Promise<He
   const dateTo = new Date(dateToRaw);
   dateTo.setUTCDate(dateTo.getUTCDate() + 1);
 
-  const whereLog: Record<string, unknown> = {
+  const whereLog: Prisma.HeadcountLogWhereInput = {
     createdAt: { gte: dateFrom, lt: dateTo },
   };
   if (classId) whereLog.classId = classId;
@@ -215,7 +216,7 @@ export async function headcountTrendsReport(params: HeadcountParams): Promise<He
     reportedByDay.set(day, l.count);
   }
 
-  const whereRec: Record<string, unknown> = {
+  const whereRec: Prisma.CheckInRecordWhereInput = {
     checkedInAt: { gte: dateFrom, lt: dateTo },
   };
   if (classId) whereRec.classId = classId;
@@ -294,16 +295,29 @@ export async function volunteerHoursReport(params: VolunteerHoursParams): Promis
   const dateTo = new Date(dateToRaw);
   dateTo.setUTCDate(dateTo.getUTCDate() + 1);
 
-  const userRoles = await db.userRole.findMany({
+  // Roles live on PersonRole (not UserRole). Find Volunteer/Teacher people,
+  // then resolve to their User logins (a person may have no login — skip those).
+  const roleRows = await db.personRole.findMany({
     where: { role: { in: ["Volunteer", "Teacher"] } },
-    select: { userId: true, role: true },
+    select: { personId: true, role: true },
   });
-  const userIds = Array.from(new Set(userRoles.map((u) => u.userId)));
+  const personIdsWithRole = Array.from(new Set(roleRows.map((r) => r.personId)));
+  const roleByPerson = new Map<string, string[]>();
+  for (const pr of roleRows) {
+    const arr = roleByPerson.get(pr.personId) ?? [];
+    if (!arr.includes(pr.role)) arr.push(pr.role);
+    roleByPerson.set(pr.personId, arr);
+  }
+
+  const logins = await db.user.findMany({
+    where: { personId: { in: personIdsWithRole } },
+    select: { id: true, personId: true },
+  });
+  const userIds = logins.map((l) => l.id);
   const roleByUser = new Map<string, string[]>();
-  for (const ur of userRoles) {
-    const arr = roleByUser.get(ur.userId) ?? [];
-    if (!arr.includes(ur.role)) arr.push(ur.role);
-    roleByUser.set(ur.userId, arr);
+  for (const l of logins) {
+    const roles = roleByPerson.get(l.personId) ?? [];
+    roleByUser.set(l.id, roles);
   }
 
   if (userIds.length === 0) {

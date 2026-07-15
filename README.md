@@ -57,6 +57,24 @@ docker compose up -d --build
 
 The first-run wizard creates your organisation + first admin account + seeds the default SDA programs (Sabbath School, Pathfinders, Adventurers, Community Childcare).
 
+### 🔒 HTTPS (recommended)
+
+For any deployment beyond localhost, serve ChildCheck over HTTPS via Caddy (bundled opt-in):
+
+```bash
+# Docker — auto Let's Encrypt for a real domain:
+DOMAIN=checkin.mychurch.org docker compose --profile tls up -d
+
+# Docker — self-signed for LAN-only (no domain needed):
+cp docker/Caddyfile.lan docker/Caddyfile
+docker compose --profile tls up -d
+
+# Native install (Linux/macOS/Windows) — adds Caddy automatically:
+sudo bash install/install-linux.sh --tls
+```
+
+See [Security & TLS guide](docs/deployment/security.md) for the full walkthrough, including Caddy's internal root CA import for LAN-only setups.
+
 ---
 
 ## Installation

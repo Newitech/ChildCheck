@@ -5,6 +5,8 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { ServiceWorkerRegister } from "@/components/domain/service-worker-register";
 import { RuntimeTheme } from "@/components/domain/runtime-theme";
+import { ThemeProvider } from "@/components/domain/theme-provider";
+import { themeInitScript } from "@/lib/theme-init";
 import { Providers } from "@/components/providers";
 import { getOrgConfig } from "@/lib/branding";
 
@@ -58,15 +60,20 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript("theme") }} />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
         <Providers>
-          <RuntimeTheme />
-          {children}
-          <Toaster />
-          <SonnerToaster position="top-center" richColors closeButton />
-          <ServiceWorkerRegister />
+          <ThemeProvider>
+            <RuntimeTheme />
+            {children}
+            <Toaster />
+            <SonnerToaster position="top-center" richColors closeButton />
+            <ServiceWorkerRegister />
+          </ThemeProvider>
         </Providers>
       </body>
     </html>

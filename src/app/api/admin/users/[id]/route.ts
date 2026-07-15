@@ -2,29 +2,21 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
-import { getCurrentUser, ROLE_PERMISSIONS } from "@/lib/auth";
+import { getCurrentUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
-const KNOWN_ROLES = Object.keys(ROLE_PERMISSIONS);
-
 const updateSchema = z.object({
-  roles: z
-    .array(z.string())
-    .refine(
-      (rs) => rs.every((r) => KNOWN_ROLES.includes(r)),
-      "Unknown role in list",
-    )
-    .optional(),
   status: z.enum(["Active", "Disabled"]).optional(),
 });
 
 /**
- * GET /api/admin/users/[id] — full detail for one user.
+ * GET /api/admin/users/[id] — full detail for one login account.
  *
- * Returns the Person, roles, status, lastLoginAt, and `hasPin` (boolean).
- * NEVER returns passwordHash or pinHash.
+ * LOGIN-ONLY: username + status + lastLoginAt + linked Person. Roles + PIN
+ * live on Person (PersonRole + Person.pinHash) — fetch them via
+ * /api/admin/people/[id]. NEVER returns passwordHash.
  */
 export async function GET(
   _req: Request,
@@ -49,7 +41,6 @@ export async function GET(
           personType: true,
         },
       },
-      roles: { select: { role: true } },
     },
   });
   if (!u) {
@@ -62,7 +53,6 @@ export async function GET(
     username: u.username,
     status: u.status,
     lastLoginAt: u.lastLoginAt ? u.lastLoginAt.toISOString() : null,
-    hasPin: !!u.pinHash,
     createdAt: u.createdAt.toISOString(),
     person: u.person
       ? {
@@ -74,18 +64,17 @@ export async function GET(
           personType: u.person.personType,
         }
       : null,
-    roles: u.roles.map((r) => r.role),
   });
 }
 
 /**
- * PUT /api/admin/users/[id] — update roles + status.
+ * PUT /api/admin/users/[id] — update login-account status.
  *
- * Body: { roles?: string[], status?: "Active" | "Disabled" }
+ * Body: { status?: "Active" | "Disabled" }
  *
- * If `roles` is provided, the user's role set is REPLACED (delete all
- * existing UserRole rows, insert new). If `status` is provided, update it.
- * Audit-logs `user.update` with the changes.
+ * Roles are no longer edited here (they live on Person via PersonRole — use
+ * /api/admin/people/[id]/roles). PIN lives on Person.pinHash — use
+ * /api/admin/people/[id]/pin.
  */
 export async function PUT(
   req: Request,
@@ -97,10 +86,7 @@ export async function PUT(
   }
   const { id } = await ctx.params;
 
-  const existing = await db.user.findUnique({
-    where: { id },
-    include: { roles: { select: { role: true } } },
-  });
+  const existing = await db.user.findUnique({ where: { id } });
   if (!existing) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
@@ -117,40 +103,18 @@ export async function PUT(
     const firstError = parsed.error.issues[0]?.message ?? "Invalid input";
     return NextResponse.json({ error: firstError }, { status: 400 });
   }
-  const { roles, status } = parsed.data;
+  const { status } = parsed.data;
 
-  if (roles === undefined && status === undefined) {
+  if (status === undefined) {
     return NextResponse.json({ ok: true, changed: {} });
   }
 
   const changed: Record<string, unknown> = {};
 
-  await db.$transaction(async (tx) => {
-    if (roles !== undefined) {
-      const before = existing.roles.map((r) => r.role).sort();
-      const after = [...roles].sort();
-      const same =
-        before.length === after.length &&
-        before.every((v, i) => v === after[i]);
-      if (!same) {
-        // Delete then re-insert. `skipDuplicates` is not supported by Prisma's
-        // SQLite connector for createMany — but it's unnecessary here because
-        // we just deleted all rows for this user, and the @@unique([userId,
-        // role]) constraint protects against duplicates regardless.
-        await tx.userRole.deleteMany({ where: { userId: id } });
-        if (roles.length > 0) {
-          await tx.userRole.createMany({
-            data: roles.map((r) => ({ userId: id, role: r })),
-          });
-        }
-        changed.roles = roles;
-      }
-    }
-    if (status !== undefined && status !== existing.status) {
-      await tx.user.update({ where: { id }, data: { status } });
-      changed.status = status;
-    }
-  });
+  if (status !== existing.status) {
+    await db.user.update({ where: { id }, data: { status } });
+    changed.status = status;
+  }
 
   if (Object.keys(changed).length === 0) {
     return NextResponse.json({ ok: true, changed: {} });

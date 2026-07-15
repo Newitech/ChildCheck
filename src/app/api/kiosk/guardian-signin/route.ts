@@ -120,7 +120,7 @@ export async function POST(req: Request) {
 
   // -----------------------------------------------------------------------
   // Look up the family + its adult members (PrimaryCarer / AuthorisedGuardian)
-  // with their linked User.pinHash.
+  // with their PIN (PIN lives on Person, not User).
   // -----------------------------------------------------------------------
   const family = await db.family.findUnique({
     where: { id: familyId, isActive: true },
@@ -138,7 +138,7 @@ export async function POST(req: Request) {
               id: true,
               firstName: true,
               lastName: true,
-              user: { select: { id: true, pinHash: true, status: true } },
+              pinHash: true,
             },
           },
         },
@@ -160,10 +160,8 @@ export async function POST(req: Request) {
     role: string;
   } | null = null;
   for (const m of family.members) {
-    const u = m.person.user;
-    if (!u || !u.pinHash) continue;
-    if (u.status !== "Active") continue;
-    const ok = await verifyPin(pin, u.pinHash);
+    if (!m.person.pinHash) continue;
+    const ok = await verifyPin(pin, m.person.pinHash);
     if (ok) {
       matched = {
         personId: m.person.id,

@@ -15,9 +15,10 @@ import { join } from "node:path";
  * (see `install/childcheck-update.sh` or `docker compose pull`).
  *
  * The repo is configured via the `CHILDCHECK_UPDATE_REPO` env var, e.g.
- * `CHILDCHECK_UPDATE_REPO=childcheck/childcheck`. When unset, update
- * checking is disabled and `checkForUpdate()` returns a disabled-state
- * `UpdateStatus` without touching the network.
+ * `CHILDCHECK_UPDATE_REPO=Newitech/ChildCheck`. **Enabled by default**
+ * (pointing at the public `Newitech/ChildCheck` repo); set the var to
+ * `off`, `disabled`, `none` or `0` to disable checking for air-gapped
+ * installs, or to any `owner/repo` slug to point at a different repo.
  *
  * Results are cached for 1 hour so repeated admin page loads don't hammer
  * the GitHub API (which is rate-limited to 60 req/hour per IP for
@@ -82,16 +83,25 @@ interface CachedResult {
 let cache: CachedResult | null = null;
 const CACHE_TTL_MS = 60 * 60 * 1000;
 
-/** Repo slug for the GitHub releases API (e.g. "childcheck/childcheck"). */
+/**
+ * Repo slug for the GitHub releases API (e.g. "Newitech/ChildCheck").
+ *
+ * Resolution:
+ *   - `CHILDCHECK_UPDATE_REPO` set to `off`/`disabled`/`none`/`0` → disabled
+ *   - `CHILDCHECK_UPDATE_REPO=owner/repo` → that repo
+ *   - unset → defaults to the public repo `Newitech/ChildCheck`
+ *
+ * Returns `null` only when explicitly disabled.
+ */
 function getUpdateRepo(): string | null {
   const raw = process.env.CHILDCHECK_UPDATE_REPO?.trim();
-  if (!raw) return null;
-  // Be lenient about leading/trailing slashes or a full URL.
-  const stripped = raw
-    .replace(/^https?:\/\/github\.com\//i, "")
-    .replace(/^\/+|\/+$/g, "");
-  if (!stripped || !stripped.includes("/")) return null;
-  return stripped;
+  // Explicit opt-out for air-gapped installs.
+  if (raw && /^(off|disabled|none|0)$/i.test(raw)) return null;
+  const source = raw
+    ? raw.replace(/^https?:\/\/github\.com\//i, "").replace(/^\/+|\/+$/g, "")
+    : "Newitech/ChildCheck"; // default: the public repo
+  if (!source || !source.includes("/")) return null;
+  return source;
 }
 
 /**
@@ -131,7 +141,7 @@ interface GithubReleaseResponse {
 
 /**
  * Fetch the latest release from GitHub. The repo is configured via env var
- * `CHILDCHECK_UPDATE_REPO` (e.g. "childcheck/childcheck"). If unset, the
+ * `CHILDCHECK_UPDATE_REPO` (e.g. "Newitech/ChildCheck"). If unset, the
  * checker is disabled. Calls the GitHub releases API read-only (no auth,
  * public repos only). 5s timeout. Cached for 1 hour.
  *
@@ -158,7 +168,7 @@ export async function checkForUpdate(opts?: {
       checkedAt,
       disabled: true,
       error:
-        "Update checking is disabled. Set CHILDCHECK_UPDATE_REPO (e.g. childcheck/childcheck) to enable.",
+        "Update checking is disabled. Set CHILDCHECK_UPDATE_REPO=Newitech/ChildCheck (or remove the opt-out) to enable.",
     };
     cache = { at: Date.now(), status };
     return status;

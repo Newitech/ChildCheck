@@ -261,37 +261,37 @@ async function exportAttendanceCsv(req: Request, actorUserId: string) {
           where: { id: { in: childIds } },
           select: { id: true, firstName: true, lastName: true },
         })
-      : Promise.resolve([]),
+      : Promise.resolve([] as { id: string; firstName: string; lastName: string }[]),
     familyIds.length
       ? db.family.findMany({
           where: { id: { in: familyIds } },
           select: { id: true, familyName: true },
         })
-      : Promise.resolve([]),
+      : Promise.resolve([] as { id: string; familyName: string }[]),
     classIds.length
       ? db.groupClass.findMany({
           where: { id: { in: classIds } },
           select: { id: true, name: true },
         })
-      : Promise.resolve([]),
+      : Promise.resolve([] as { id: string; name: string }[]),
     roomIds.length
       ? db.room.findMany({
           where: { id: { in: roomIds } },
           select: { id: true, name: true },
         })
-      : Promise.resolve([]),
+      : Promise.resolve([] as { id: string; name: string }[]),
     programIds.length
       ? db.program.findMany({
           where: { id: { in: programIds } },
           select: { id: true, name: true },
         })
-      : Promise.resolve([]),
+      : Promise.resolve([] as { id: string; name: string }[]),
     eventIds.length
       ? db.event.findMany({
           where: { id: { in: eventIds } },
           select: { id: true, name: true },
         })
-      : Promise.resolve([]),
+      : Promise.resolve([] as { id: string; name: string }[]),
   ]);
 
   const childById = new Map(children.map((c) => [c.id, c]));

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, Save } from "lucide-react";
+import { Loader2, Save, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,6 +31,7 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import type { PersonListDTO } from "@/lib/people";
+import { ALL_STAFF_ROLES, LOGIN_REQUIRED_ROLES } from "@/lib/person-roles";
 
 interface Props {
   open: boolean;
@@ -56,6 +57,11 @@ type Form = {
   emergencyContactName: string;
   emergencyContactPhone: string;
   isVisitor: boolean;
+  // Optional one-shot (create only): initial PIN, staff roles, family link.
+  pin: string;
+  roles: string[];
+  familyId: string;
+  familyRole: "PrimaryCarer" | "AuthorisedGuardian" | "Child" | "";
 };
 
 const empty: Form = {
@@ -75,6 +81,10 @@ const empty: Form = {
   emergencyContactName: "",
   emergencyContactPhone: "",
   isVisitor: false,
+  pin: "",
+  roles: [],
+  familyId: "",
+  familyRole: "",
 };
 
 export function PersonForm({ open, onOpenChange, editing, onSaved }: Props) {
@@ -128,6 +138,10 @@ export function PersonForm({ open, onOpenChange, editing, onSaved }: Props) {
             emergencyContactName: d.emergencyContactName ?? "",
             emergencyContactPhone: d.emergencyContactPhone ?? "",
             isVisitor: d.isVisitor,
+            pin: "",
+            roles: [],
+            familyId: "",
+            familyRole: "",
           });
         } catch (e) {
           toast.error("Failed to load person", {
@@ -169,6 +183,19 @@ export function PersonForm({ open, onOpenChange, editing, onSaved }: Props) {
         emergencyContactPhone: form.emergencyContactPhone.trim() || null,
         isVisitor: form.isVisitor,
       };
+      // Optional one-shot fields (create only).
+      if (!editing) {
+        if (form.pin && /^\d{4,6}$/.test(form.pin)) {
+          payload.pin = form.pin;
+        }
+        if (form.roles.length > 0) {
+          payload.roles = form.roles;
+        }
+        if (form.familyId && form.familyRole) {
+          payload.familyId = form.familyId;
+          payload.familyRole = form.familyRole;
+        }
+      }
       const res = editing
         ? await fetch(`/api/admin/people/${editing.id}`, {
             method: "PUT",
@@ -213,7 +240,7 @@ export function PersonForm({ open, onOpenChange, editing, onSaved }: Props) {
           </div>
         ) : (
           <Tabs defaultValue="identity" className="flex-1 overflow-hidden flex flex-col">
-            <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4">
+            <TabsList className={`grid w-full grid-cols-2 ${editing ? "sm:grid-cols-4" : "sm:grid-cols-5"}`}>
               <TabsTrigger value="identity">Identity</TabsTrigger>
               <TabsTrigger value="contact">Contact</TabsTrigger>
               <TabsTrigger value="child">Child details</TabsTrigger>
@@ -221,6 +248,7 @@ export function PersonForm({ open, onOpenChange, editing, onSaved }: Props) {
                 Medical
                 <span className="ml-1.5 text-[10px] text-destructive">●</span>
               </TabsTrigger>
+              {!editing && <TabsTrigger value="access">Access</TabsTrigger>}
             </TabsList>
 
             <div className="overflow-y-auto scroll-thin px-1 py-3 flex-1">
@@ -411,6 +439,113 @@ export function PersonForm({ open, onOpenChange, editing, onSaved }: Props) {
                   />
                 </Field>
               </TabsContent>
+
+              {!editing && (
+                <TabsContent value="access" className="space-y-4 mt-0">
+                  <p className="text-xs text-muted-foreground">
+                    Optional — set an initial guardian PIN, grant staff roles,
+                    and/or add this person to a family now. You can do all of
+                    this later too.
+                  </p>
+
+                  {/* Guardian PIN */}
+                  <Field label="Guardian PIN" hint="4–6 digits for kiosk & guardian portal (optional)">
+                    <Input
+                      inputMode="numeric"
+                      pattern="\d*"
+                      value={form.pin}
+                      onChange={(e) =>
+                        setForm({
+                          ...form,
+                          pin: e.target.value.replace(/\D/g, "").slice(0, 6),
+                        })
+                      }
+                      placeholder="e.g. 1234"
+                      autoComplete="off"
+                      maxLength={6}
+                    />
+                  </Field>
+
+                  {/* Roles */}
+                  <div className="space-y-2">
+                    <Label className="text-sm">Staff roles (optional)</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Admin &amp; PeopleManager need a login — create one after
+                      saving.
+                    </p>
+                    <div className="grid sm:grid-cols-2 gap-2">
+                      {ALL_STAFF_ROLES.map((role) => {
+                        const checked = form.roles.includes(role);
+                        const locked = LOGIN_REQUIRED_ROLES.has(role);
+                        return (
+                          <label
+                            key={role}
+                            className={`flex items-center gap-2 rounded-md border p-2 ${
+                              locked
+                                ? "opacity-60"
+                                : "cursor-pointer hover:bg-muted/40 has-[:checked]:border-primary has-[:checked]:bg-primary/5"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              disabled={locked}
+                              checked={checked}
+                              onChange={() =>
+                                setForm((f) => ({
+                                  ...f,
+                                  roles: checked
+                                    ? f.roles.filter((r) => r !== role)
+                                    : [...f.roles, role],
+                                }))
+                              }
+                              className="h-4 w-4"
+                            />
+                            <span className="text-sm font-medium">{role}</span>
+                            {locked && (
+                              <span className="text-[10px] text-muted-foreground ml-auto">
+                                needs login
+                              </span>
+                            )}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Family */}
+                  <div className="space-y-2">
+                    <Label className="text-sm">Add to family (optional)</Label>
+                    <FamilyPicker
+                      value={form.familyId}
+                      onChange={(familyId) => setForm((f) => ({ ...f, familyId }))}
+                    />
+                    {form.familyId && (
+                      <Field label="Family role">
+                        <Select
+                          value={form.familyRole || "PrimaryCarer"}
+                          onValueChange={(v) =>
+                            setForm((f) => ({
+                              ...f,
+                              familyRole: v as Form["familyRole"],
+                            }))
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="PrimaryCarer">Primary Carer</SelectItem>
+                            <SelectItem value="AuthorisedGuardian">
+                              Authorised Guardian
+                            </SelectItem>
+                            <SelectItem value="Child">Child</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                    )}
+                  </div>
+                </TabsContent>
+              )}
             </div>
           </Tabs>
         )}
@@ -452,6 +587,109 @@ function Field({
       </Label>
       {children}
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+    </div>
+  );
+}
+
+interface FamilyOption {
+  id: string;
+  familyName: string;
+}
+
+function FamilyPicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (familyId: string) => void;
+}) {
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<FamilyOption[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [selected, setSelected] = useState<FamilyOption | null>(null);
+
+  useEffect(() => {
+    if (!q.trim()) {
+      setResults([]);
+      return;
+    }
+    setSearching(true);
+    const h = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `/api/admin/families?q=${encodeURIComponent(q)}&pageSize=20`,
+          { cache: "no-store" },
+        );
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        const data = (await res.json()) as { items: FamilyOption[] };
+        setResults(data.items);
+      } catch {
+        setResults([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 200);
+    return () => clearTimeout(h);
+  }, [q]);
+
+  return (
+    <div className="space-y-2">
+      {selected || value ? (
+        <div className="flex items-center justify-between rounded-md border p-2">
+          <span className="text-sm font-medium">
+            {selected?.familyName ?? value}
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setSelected(null);
+              onChange("");
+            }}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      ) : (
+        <>
+          <Input
+            placeholder="Search families by name…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+          {searching && (
+            <p className="text-xs text-muted-foreground flex items-center">
+              <Loader2 className="h-3 w-3 mr-1 animate-spin" /> Searching…
+            </p>
+          )}
+          {results.length > 0 && (
+            <ul className="border rounded-md divide-y max-h-40 overflow-y-auto scroll-thin">
+              {results.map((f) => (
+                <li
+                  key={f.id}
+                  className="flex items-center justify-between gap-2 p-2 text-sm hover:bg-muted/40"
+                >
+                  <span className="font-medium truncate">{f.familyName}</span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setSelected(f);
+                      onChange(f.id);
+                      setQ("");
+                      setResults([]);
+                    }}
+                  >
+                    Select
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
     </div>
   );
 }

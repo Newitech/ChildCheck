@@ -131,11 +131,12 @@ export function FamilyDetail({ initial }: Props) {
           { cache: "no-store" },
         );
         if (!res.ok) throw new Error(`status ${res.status}`);
-        const data = (await res.json()) as {
+        const body = (await res.json()) as {
           items: { id: string; firstName: string; lastName: string; personType: string; email: string | null }[];
         };
+        // Filter out people who are already members of this family.
         setSearchResults(
-          data.items.filter(
+          body.items.filter(
             (p) => !data.members.some((m) => m.person.id === p.id),
           ),
         );

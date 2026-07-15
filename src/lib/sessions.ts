@@ -70,14 +70,19 @@ export async function getActiveProgramsForDate(
   const jsDay = date.getDay();
 
   // -----------------------------------------------------------------------
-  // 1. Pull every active class with its program + room + active schedules.
-  //    Filter in-app to "has ≥1 schedule matching today (recurring dayOfWeek
-  //    = jsDay OR adhoc date in [dayStart, dayEnd])".
+  // 1. Pull every active class with its program (+ program-level schedules)
+  //    + room + class-level schedules.
+  //    A class is "active today" if it matches any class-level schedule OR
+  //    any program-level schedule inherited from its parent program.
   // -----------------------------------------------------------------------
   const classes = await db.groupClass.findMany({
     where: { isActive: true, program: { isActive: true } },
     include: {
-      program: { select: { id: true, name: true, slug: true } },
+      program: {
+        // Can't mix select + include — use include with the fields we need
+        // (Prisma includes all scalar fields by default + the schedules relation).
+        include: { schedules: { where: { isActive: true } } },
+      },
       room: { select: { id: true, name: true } },
       schedules: { where: { isActive: true } },
     },
@@ -86,18 +91,39 @@ export async function getActiveProgramsForDate(
   // Group classes by their program id, collecting the matching schedule info.
   const byProgram = new Map<string, ProgramBucket>();
 
+  /** Check if a single schedule matches the given date. */
+  function scheduleMatches(
+    s: { kind: string; dayOfWeek: number | null; weekOfMonth: number | null; adhocDate: Date | null },
+  ): boolean {
+    if (s.kind === "recurring") {
+      if (s.dayOfWeek !== jsDay) return false;
+      // No weekOfMonth = every week. With weekOfMonth, check the date is the
+      // Nth occurrence of this day-of-week in the month.
+      if (s.weekOfMonth == null) return true;
+      const dom = date.getDate(); // 1–31
+      const occurrence = Math.ceil(dom / 7); // 1=first, 2=second, etc.
+      if (s.weekOfMonth === 5) {
+        // "Last" — adding 7 days moves to next month.
+        const next = new Date(date);
+        next.setDate(next.getDate() + 7);
+        return next.getMonth() !== date.getMonth();
+      }
+      return occurrence === s.weekOfMonth;
+    }
+    if (s.kind === "adhoc" && s.adhocDate) {
+      const d = new Date(s.adhocDate);
+      return d >= dayStart && d <= dayEnd;
+    }
+    return false;
+  }
+
   for (const cls of classes) {
-    // Find the first matching schedule for today.
-    const match = cls.schedules.find((s) => {
-      if (s.kind === "recurring") {
-        return s.dayOfWeek === jsDay;
-      }
-      if (s.kind === "adhoc" && s.adhocDate) {
-        const d = new Date(s.adhocDate);
-        return d >= dayStart && d <= dayEnd;
-      }
-      return false;
-    });
+    // Check class-level schedules first, then inherited program-level schedules.
+    const allSchedules = [
+      ...cls.schedules,
+      ...(cls.program.schedules ?? []),
+    ];
+    const match = allSchedules.find(scheduleMatches);
     if (!match) continue;
 
     const prog = cls.program;

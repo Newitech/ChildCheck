@@ -122,9 +122,10 @@ export default async function KioskFamilyDetailPage({
     children: family.members
       .filter((m) => m.role === "Child")
       .map((m) => {
-        const hasAlerts =
+        const hasAlerts = Boolean(
           (m.person.allergies && m.person.allergies.trim().length > 0) ||
-          (m.person.medicalNotes && m.person.medicalNotes.trim().length > 0);
+          (m.person.medicalNotes && m.person.medicalNotes.trim().length > 0),
+        );
         const ageYears = m.person.dateOfBirth ? computeAge(m.person.dateOfBirth) : null;
         const openRec = openRecordByChild.get(m.person.id);
         return {

@@ -99,7 +99,7 @@ export async function POST(req: Request) {
   // Look up the user by Person.email — but ALWAYS return ok:true (even if no
   // match) so this endpoint can't be used for user enumeration.
   const person = await db.person.findFirst({
-    where: { email: { equals: email, mode: "insensitive" } },
+    where: { email: { equals: email } },
     select: { id: true, firstName: true, user: { select: { id: true } } },
   });
   const user = person?.user;

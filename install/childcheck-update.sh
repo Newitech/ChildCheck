@@ -19,7 +19,7 @@
 # Usage:
 #   sudo bash install/childcheck-update.sh                          # latest release
 #   sudo bash install/childcheck-update.sh --version v1.2.0         # specific version
-#   sudo bash install/childcheck-update.sh --repo childcheck/childcheck
+#   sudo bash install/childcheck-update.sh --repo Newitech/ChildCheck
 #   sudo bash install/childcheck-update.sh --dir /opt/childcheck
 #   sudo bash install/childcheck-update.sh --health-url http://localhost:3000/api/config
 #
@@ -27,7 +27,7 @@
 #   docker compose pull && docker compose up -d
 #
 # Env vars:
-#   CHILDCHECK_UPDATE_REPO   GitHub repo slug (default: childcheck/childcheck)
+#   CHILDCHECK_UPDATE_REPO   GitHub repo slug (default: Newitech/ChildCheck)
 #   CHILDCHECK_VERSION         Pin a version (same as --version)
 # =============================================================================
 set -euo pipefail
@@ -35,7 +35,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Defaults + arg parsing
 # ---------------------------------------------------------------------------
-REPO="${CHILDCHECK_UPDATE_REPO:-childcheck/childcheck}"
+REPO="${CHILDCHECK_UPDATE_REPO:-Newitech/ChildCheck}"
 VERSION="${CHILDCHECK_VERSION:-}"
 INSTALL_DIR=""
 HEALTH_URL=""

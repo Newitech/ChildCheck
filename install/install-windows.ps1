@@ -30,7 +30,7 @@ param(
     [string]$Source = "",
     [string]$Version = "latest",
     [string]$InstallDir = "C:\Program Files\ChildCheck",
-    [string]$UrlBase = "https://github.com/childcheck/childcheck/releases/download",
+    [string]$UrlBase = "https://github.com/Newitech/ChildCheck/releases/download",
     [switch]$Tls
 )
 

@@ -103,10 +103,10 @@ export async function POST(req: Request) {
     }),
     classIds.length > 0
       ? db.groupClass.findMany({ where: { id: { in: classIds } }, select: { id: true, name: true } })
-      : Promise.resolve([]),
+      : Promise.resolve([] as { id: string; name: string }[]),
     roomIds.length > 0
       ? db.room.findMany({ where: { id: { in: roomIds } }, select: { id: true, name: true } })
-      : Promise.resolve([]),
+      : Promise.resolve([] as { id: string; name: string }[]),
   ]);
   const childMap = new Map(childRows.map((c) => [c.id, c]));
   const classMap = new Map(classRows.map((c) => [c.id, c]));

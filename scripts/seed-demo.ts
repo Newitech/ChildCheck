@@ -306,6 +306,13 @@ async function seedDemo() {
     personType: "Adult",
     gender: "Female",
   });
+  // Set the PIN on the Person (not the User) and grant the role via PersonRole.
+  if (!teacherPerson.pinHash) {
+    await db.person.update({
+      where: { id: teacherPerson.id },
+      data: { pinHash: await hashPin("1234") },
+    });
+  }
   const existingTeacherUser = await db.user.findFirst({ where: { username: "teacher" } });
   if (!existingTeacherUser) {
     const teacherUser = await db.user.create({
@@ -313,10 +320,11 @@ async function seedDemo() {
         personId: teacherPerson.id,
         username: "teacher",
         passwordHash: await hashPassword("password123"),
-        pinHash: await hashPin("1234"),
         status: "Active",
-        roles: { create: [{ role: "Teacher" }] },
       },
+    });
+    await db.personRole.create({
+      data: { personId: teacherPerson.id, role: "Teacher" },
     });
     await db.auditLog.create({
       data: {
@@ -353,8 +361,10 @@ async function seedDemo() {
         username: "volunteer",
         passwordHash: await hashPassword("password123"),
         status: "Active",
-        roles: { create: [{ role: "Volunteer" }] },
       },
+    });
+    await db.personRole.create({
+      data: { personId: volunteerPerson.id, role: "Volunteer" },
     });
     await db.auditLog.create({
       data: {

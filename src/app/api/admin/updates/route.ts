@@ -30,7 +30,7 @@ export const dynamic = "force-dynamic";
  *     updateAvailable: boolean,
  *     checkedAt: ISO,
  *     error?: string,         // present when the check failed OR is disabled
- *     disabled?: boolean,     // true when CHILDCHETECK_UPDATE_REPO is unset
+ *     disabled?: boolean,     // true when CHILDCHECK_UPDATE_REPO=off
  *     updateCommand: string,  // "docker compose pull ..." or "sudo bash ..."
  *     installType: "docker" | "native"
  *   }
@@ -40,10 +40,11 @@ export const dynamic = "force-dynamic";
  * docs/deployment/updating.md).
  *
  * Env vars:
- *   CHILDCHETECK_UPDATE_REPO  e.g. "childcheck/childcheck" — enables update
- *                              checking. Leave unset to disable.
- *   CHILDCHECK_DOCKER         set by the Docker entrypoint — controls which
- *                              update command is returned.
+ *   CHILDCHECK_UPDATE_REPO  e.g. "Newitech/ChildCheck" — defaults to the
+ *                            public repo when unset; set to off/disabled/none/0
+ *                            to disable checking.
+ *   CHILDCHECK_DOCKER       set by the Docker entrypoint — controls which
+ *                            update command is returned.
  */
 export async function GET(req: Request): Promise<Response> {
   const user = await getCurrentUser();

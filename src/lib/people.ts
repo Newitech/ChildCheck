@@ -70,6 +70,8 @@ export interface PersonDetailDTO {
   createdAt: string;
   updatedAt: string;
   hasUser: boolean;
+  hasPin: boolean;
+  roles: string[];
   familyMemberships: FamilyMembershipDTO[];
   wwccCards: WwccCardDTO[];
 }
@@ -179,6 +181,8 @@ export async function toPersonDetailDTO(
     createdAt: Date;
     updatedAt: Date;
     user?: { id: string } | null;
+    pinHash?: string | null;
+    roles?: { role: string }[];
     familyMemberships?: {
       id: string;
       role: string;
@@ -222,6 +226,8 @@ export async function toPersonDetailDTO(
     createdAt: person.createdAt.toISOString(),
     updatedAt: person.updatedAt.toISOString(),
     hasUser: !!person.user,
+    hasPin: !!person.pinHash,
+    roles: (person.roles ?? []).map((r) => r.role),
     familyMemberships: (person.familyMemberships ?? []).map((m) => ({
       familyId: m.family.id,
       familyName: m.family.familyName,
@@ -268,6 +274,7 @@ export async function loadPersonDetail(id: string, wwccEnabled: boolean) {
     where: { id },
     include: {
       user: { select: { id: true } },
+      roles: { select: { role: true } },
       familyMemberships: { include: { family: { select: { id: true, familyName: true } } } },
       ...(wwccEnabled ? { wwccards: true } : {}),
     },

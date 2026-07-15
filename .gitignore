@@ -92,3 +92,11 @@ next-env.d.ts
 # --- Screenshots saved during dev verification ---
 /.stage0-*.png
 /tmp-*.png
+
+# --- Additional dev-only excludes (not in the original .gitignore) ---
+/Elvanto Test Data/
+/download/
+/.zcode/
+/.zscripts/
+/prisma/db/
+/.zcode/plans/

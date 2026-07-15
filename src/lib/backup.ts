@@ -88,8 +88,10 @@ export function getDbFilePath(): string {
   if (raw.startsWith("/") || /^[A-Za-z]:[\\/]/.test(raw)) {
     return raw;
   }
-  // Relative path — resolve against the project root.
-  return path.resolve(process.cwd(), raw);
+  // Relative path — Prisma resolves these against the schema file directory
+  // (prisma/), NOT the project root. Match that behaviour so backup reads the
+  // same file Prisma is using. See https://pris.ly/d/relative-db-paths
+  return path.resolve(process.cwd(), "prisma", raw);
 }
 
 // ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@ const createSchema = z
   .object({
     kind: z.enum(["recurring", "adhoc"]),
     dayOfWeek: z.number().int().min(0).max(6).optional().nullable(),
+    weekOfMonth: z.number().int().min(1).max(5).optional().nullable(),
     startTime: z
       .string()
       .trim()
@@ -78,6 +79,7 @@ export async function GET(
       classId: s.classId,
       kind: s.kind,
       dayOfWeek: s.dayOfWeek,
+      weekOfMonth: s.weekOfMonth,
       startTime: s.startTime,
       endTime: s.endTime,
       adhocDate: s.adhocDate ? s.adhocDate.toISOString() : null,
@@ -129,8 +131,10 @@ export async function POST(
   const created = await db.schedule.create({
     data: {
       classId: id,
+      programId: null,
       kind: p.kind,
       dayOfWeek: p.kind === "recurring" ? p.dayOfWeek ?? null : null,
+      weekOfMonth: p.kind === "recurring" ? (p.weekOfMonth ?? null) : null,
       startTime: p.startTime,
       endTime: p.endTime ?? null,
       adhocDate:

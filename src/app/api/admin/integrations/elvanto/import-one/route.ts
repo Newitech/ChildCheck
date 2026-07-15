@@ -87,8 +87,8 @@ export async function POST(req: Request) {
   }
 
   // Allergies / medical split (mirror of the bulk mapper).
-  let allergies = mapped.allergies ?? null;
-  let medicalNotes = mapped.medicalInfo ?? null;
+  let allergies: string | null = mapped.allergies ?? null;
+  let medicalNotes: string | null = mapped.medicalInfo ?? null;
   if (mapped.medicalInfo) {
     const lower = mapped.medicalInfo.toLowerCase();
     if (lower.includes("allerg")) {

@@ -110,6 +110,7 @@ export function ProgramDetail({ programId }: Props) {
   const [classFormOpen, setClassFormOpen] = useState(false);
   const [editingClass, setEditingClass] = useState<ProgramDetail["classes"][number] | null>(null);
   const [deletingClass, setDeletingClass] = useState<ProgramDetail["classes"][number] | null>(null);
+  const [scheduleClass, setScheduleClass] = useState<ProgramDetail["classes"][number] | null>(null);
 
   // Edit program form state
   const [progName, setProgName] = useState("");
@@ -379,6 +380,9 @@ export function ProgramDetail({ programId }: Props) {
         </CardHeader>
       </Card>
 
+      {/* Club (program-level) schedules */}
+      <ProgramSchedulesCard programId={programId} programName={program?.name ?? "Program"} onChanged={load} />
+
       {/* Classes section */}
       <Card>
         <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -476,6 +480,14 @@ export function ProgramDetail({ programId }: Props) {
                               onClick={() => openEditClass(c)}
                             >
                               <PencilLine className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label={`Schedule for ${c.name}`}
+                              onClick={() => setScheduleClass(c)}
+                            >
+                              <Clock className="h-4 w-4" />
                             </Button>
                             <AlertDialog
                               open={deletingClass?.id === c.id}
@@ -709,6 +721,710 @@ export function ProgramDetail({ programId }: Props) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Schedule management dialog */}
+      {scheduleClass && (
+        <ScheduleDialog
+          key={`sched-${scheduleClass.id}`}
+          classItem={scheduleClass}
+          onClose={() => setScheduleClass(null)}
+          onChanged={load}
+        />
+      )}
     </div>
+  );
+}
+
+// =========================================================================
+// Schedule management dialog
+// =========================================================================
+
+interface ScheduleItem {
+  id: string;
+  kind: string; // "recurring" | "adhoc"
+  dayOfWeek: number | null; // 0=Sun ... 6=Sat
+  weekOfMonth: number | null; // 1-5 (5=Last), null = every week
+  startTime: string; // "HH:MM"
+  endTime: string | null;
+  adhocDate: string | null;
+  notes: string | null;
+}
+
+const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+const WEEK_LABELS: Record<number, string> = {
+  1: "1st", 2: "2nd", 3: "3rd", 4: "4th", 5: "Last",
+};
+
+function formatSchedule(s: ScheduleItem): string {
+  if (s.kind === "recurring") {
+    const day = s.dayOfWeek != null ? DAYS[s.dayOfWeek] : "?";
+    const time = `${s.startTime}${s.endTime ? `–${s.endTime}` : ""}`;
+    if (s.weekOfMonth != null) {
+      const wk = WEEK_LABELS[s.weekOfMonth] ?? `${s.weekOfMonth}th`;
+      return `${wk} ${day} ${time}`;
+    }
+    return `Every ${day} ${time}`;
+  }
+  // adhoc
+  const d = s.adhocDate ? new Date(s.adhocDate) : null;
+  const dateStr = d ? d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }) : "?";
+  const time = `${s.startTime}${s.endTime ? `–${s.endTime}` : ""}`;
+  return `${dateStr} ${time}`;
+}
+
+function ScheduleDialog({
+  classItem,
+  onClose,
+  onChanged,
+}: {
+  classItem: ProgramDetail["classes"][number];
+  onClose: () => void;
+  onChanged: () => Promise<void>;
+}) {
+  const [schedules, setSchedules] = useState<ScheduleItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  // Form state
+  const [kind, setKind] = useState<"recurring" | "adhoc">("recurring");
+  const [dayOfWeek, setDayOfWeek] = useState("0");
+  const [weekOfMonth, setWeekOfMonth] = useState("0"); // 0=every week, 1-5=Nth/Last
+  const [startTime, setStartTime] = useState("09:00");
+  const [endTime, setEndTime] = useState("");
+  const [adhocDate, setAdhocDate] = useState("");
+  const [notes, setNotes] = useState("");
+
+  const loadSchedules = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/admin/classes/${classItem.id}/schedules`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      const data = (await res.json()) as { items: ScheduleItem[] };
+      setSchedules(data.items ?? []);
+    } catch {
+      setSchedules([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [classItem.id]);
+
+  useEffect(() => {
+    void loadSchedules();
+  }, [loadSchedules]);
+
+  const resetForm = () => {
+    setKind("recurring");
+    setDayOfWeek("0");
+    setWeekOfMonth("0");
+    setStartTime("09:00");
+    setEndTime("");
+    setAdhocDate("");
+    setNotes("");
+    setEditingId(null);
+  };
+
+  const startEdit = (s: ScheduleItem) => {
+    setEditingId(s.id);
+    setKind(s.kind as "recurring" | "adhoc");
+    setDayOfWeek(s.dayOfWeek != null ? String(s.dayOfWeek) : "0");
+    setWeekOfMonth(s.weekOfMonth != null ? String(s.weekOfMonth) : "0");
+    setStartTime(s.startTime);
+    setEndTime(s.endTime ?? "");
+    setAdhocDate(s.adhocDate ? s.adhocDate.slice(0, 10) : "");
+    setNotes(s.notes ?? "");
+  };
+
+  const handleSubmit = async () => {
+    // Basic validation
+    if (kind === "recurring" && dayOfWeek === "") {
+      toast.error("Select a day of week for recurring schedules.");
+      return;
+    }
+    if (kind === "adhoc" && !adhocDate) {
+      toast.error("Select a date for adhoc schedules.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const body: Record<string, unknown> = {
+        kind,
+        startTime,
+        endTime: endTime || null,
+        notes: notes.trim() || null,
+      };
+      if (kind === "recurring") {
+        body.dayOfWeek = parseInt(dayOfWeek, 10);
+        const wom = parseInt(weekOfMonth, 10);
+        if (wom > 0) body.weekOfMonth = wom;
+      } else {
+        body.adhocDate = new Date(adhocDate + "T00:00:00Z").toISOString();
+      }
+
+      const url = editingId
+        ? `/api/admin/classes/${classItem.id}/schedules/${editingId}`
+        : `/api/admin/classes/${classItem.id}/schedules`;
+      const method = editingId ? "PUT" : "POST";
+
+      const res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error ?? `status ${res.status}`);
+      }
+      toast.success(editingId ? "Schedule updated" : "Schedule added");
+      resetForm();
+      await loadSchedules();
+      await onChanged();
+    } catch (e) {
+      toast.error("Failed to save schedule", {
+        description: e instanceof Error ? e.message : undefined,
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (scheduleId: string) => {
+    try {
+      const res = await fetch(`/api/admin/classes/${classItem.id}/schedules/${scheduleId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error ?? `status ${res.status}`);
+      }
+      toast.success("Schedule removed");
+      await loadSchedules();
+      await onChanged();
+    } catch (e) {
+      toast.error("Failed to delete schedule", {
+        description: e instanceof Error ? e.message : undefined,
+      });
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto scroll-thin">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Clock className="h-5 w-5 text-primary" />
+            Schedule — {classItem.name}
+          </DialogTitle>
+          <DialogDescription>
+            Manage recurring weekly times and one-off dates for this class.
+          </DialogDescription>
+        </DialogHeader>
+
+        {/* Existing schedules list */}
+        <div className="space-y-2">
+          {loading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading schedules…
+            </div>
+          ) : schedules.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4 text-center">
+              No schedules set. Add one below.
+            </p>
+          ) : (
+            <ul className="space-y-1">
+              {schedules.map((s) => (
+                <li
+                  key={s.id}
+                  className="flex items-center justify-between gap-2 rounded-md border p-2 text-sm"
+                >
+                  <div className="min-w-0">
+                    <span className="font-medium">{formatSchedule(s)}</span>
+                    {s.notes && (
+                      <p className="text-xs text-muted-foreground truncate">{s.notes}</p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      aria-label="Edit schedule"
+                      onClick={() => startEdit(s)}
+                    >
+                      <PencilLine className="h-4 w-4" />
+                    </Button>
+                    <button
+                      type="button"
+                      aria-label="Delete schedule"
+                      onClick={() => void handleDelete(s.id)}
+                      className="inline-flex items-center justify-center h-9 w-9 rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {/* Add / Edit form */}
+        <div className="border-t pt-3 space-y-3">
+          <p className="text-sm font-medium">
+            {editingId ? "Edit schedule" : "Add schedule"}
+          </p>
+
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant={kind === "recurring" ? "default" : "outline"}
+              onClick={() => setKind("recurring")}
+              type="button"
+            >
+              Recurring (weekly)
+            </Button>
+            <Button
+              size="sm"
+              variant={kind === "adhoc" ? "default" : "outline"}
+              onClick={() => setKind("adhoc")}
+              type="button"
+            >
+              One-off date
+            </Button>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            {kind === "recurring" ? (
+              <>
+                <div className="space-y-1">
+                  <Label className="text-xs">Day of week</Label>
+                  <Select value={dayOfWeek} onValueChange={setDayOfWeek}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {DAYS.map((d, i) => (
+                        <SelectItem key={i} value={String(i)}>{d}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Repeat</Label>
+                  <Select value={weekOfMonth} onValueChange={setWeekOfMonth}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0">Every week</SelectItem>
+                      <SelectItem value="1">1st of month</SelectItem>
+                      <SelectItem value="2">2nd of month</SelectItem>
+                      <SelectItem value="3">3rd of month</SelectItem>
+                      <SelectItem value="4">4th of month</SelectItem>
+                      <SelectItem value="5">Last of month</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
+            ) : (
+              <div className="space-y-1">
+                <Label className="text-xs">Date</Label>
+                <Input
+                  type="date"
+                  value={adhocDate}
+                  onChange={(e) => setAdhocDate(e.target.value)}
+                />
+              </div>
+            )}
+            <div className="space-y-1">
+              <Label className="text-xs">Start time</Label>
+              <Input
+                type="time"
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">End time (optional)</Label>
+              <Input
+                type="time"
+                value={endTime}
+                onChange={(e) => setEndTime(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <Label className="text-xs">Notes (optional)</Label>
+            <Input
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              maxLength={2000}
+              placeholder="e.g. School holidays only"
+            />
+          </div>
+
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              onClick={() => void handleSubmit()}
+              disabled={saving}
+            >
+              {saving && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
+              {editingId ? "Update" : "Add schedule"}
+            </Button>
+            {editingId && (
+              <Button size="sm" variant="ghost" onClick={resetForm}>
+                Cancel edit
+              </Button>
+            )}
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// =========================================================================
+// Program-level (Club) schedules card
+// =========================================================================
+
+function ProgramSchedulesCard({
+  programId,
+  programName,
+  onChanged,
+}: {
+  programId: string;
+  programName: string;
+  onChanged: () => Promise<void>;
+}) {
+  const [schedules, setSchedules] = useState<ScheduleItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [dialogOpen, setDialogOpen] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/admin/programs/${programId}/schedules`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      const data = (await res.json()) as { items: ScheduleItem[] };
+      setSchedules(data.items ?? []);
+    } catch {
+      setSchedules([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [programId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const handleDelete = async (scheduleId: string) => {
+    try {
+      const res = await fetch(`/api/admin/programs/${programId}/schedules/${scheduleId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error ?? `status ${res.status}`);
+      }
+      toast.success("Schedule removed");
+      await load();
+      await onChanged();
+    } catch (e) {
+      toast.error("Failed to delete schedule", {
+        description: e instanceof Error ? e.message : undefined,
+      });
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Clock className="h-4 w-4" /> Program Schedules
+          </CardTitle>
+          <CardDescription>
+            Program-level schedules that apply to ALL classes in {programName}. Set once here — every class inherits it.
+          </CardDescription>
+        </div>
+        <Button onClick={() => setDialogOpen(true)} size="sm">
+          <Plus className="mr-1.5 h-4 w-4" /> Add schedule
+        </Button>
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+          </div>
+        ) : schedules.length === 0 ? (
+          <div className="py-6 text-center text-muted-foreground text-sm">
+            No program-level schedules. Add one to apply it to all classes.
+          </div>
+        ) : (
+          <ul className="space-y-1">
+            {schedules.map((s) => (
+              <li
+                key={s.id}
+                className="flex items-center justify-between gap-2 rounded-md border p-2 text-sm"
+              >
+                <div className="min-w-0">
+                  <span className="font-medium">{formatSchedule(s)}</span>
+                  {s.notes && (
+                    <p className="text-xs text-muted-foreground truncate">{s.notes}</p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  aria-label="Delete schedule"
+                  onClick={() => void handleDelete(s.id)}
+                  className="inline-flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+
+      {dialogOpen && (
+        <ProgramScheduleDialog
+          programId={programId}
+          programName={programName}
+          onClose={() => setDialogOpen(false)}
+          onChanged={async () => { await load(); await onChanged(); }}
+        />
+      )}
+    </Card>
+  );
+}
+
+// =========================================================================
+// Program schedule add/edit dialog (reuses the schedule form pattern)
+// =========================================================================
+
+function ProgramScheduleDialog({
+  programId,
+  programName,
+  onClose,
+  onChanged,
+}: {
+  programId: string;
+  programName: string;
+  onClose: () => void;
+  onChanged: () => Promise<void>;
+}) {
+  const [schedules, setSchedules] = useState<ScheduleItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  const [kind, setKind] = useState<"recurring" | "adhoc">("recurring");
+  const [dayOfWeek, setDayOfWeek] = useState("0");
+  const [weekOfMonth, setWeekOfMonth] = useState("0");
+  const [startTime, setStartTime] = useState("09:00");
+  const [endTime, setEndTime] = useState("");
+  const [adhocDate, setAdhocDate] = useState("");
+  const [notes, setNotes] = useState("");
+
+  const loadSchedules = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/admin/programs/${programId}/schedules`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      const data = (await res.json()) as { items: ScheduleItem[] };
+      setSchedules(data.items ?? []);
+    } catch {
+      setSchedules([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [programId]);
+
+  useEffect(() => { void loadSchedules(); }, [loadSchedules]);
+
+  const resetForm = () => {
+    setKind("recurring"); setDayOfWeek("0"); setWeekOfMonth("0");
+    setStartTime("09:00"); setEndTime(""); setAdhocDate(""); setNotes("");
+    setEditingId(null);
+  };
+
+  const startEdit = (s: ScheduleItem) => {
+    setEditingId(s.id);
+    setKind(s.kind as "recurring" | "adhoc");
+    setDayOfWeek(s.dayOfWeek != null ? String(s.dayOfWeek) : "0");
+    setWeekOfMonth(s.weekOfMonth != null ? String(s.weekOfMonth) : "0");
+    setStartTime(s.startTime); setEndTime(s.endTime ?? "");
+    setAdhocDate(s.adhocDate ? s.adhocDate.slice(0, 10) : "");
+    setNotes(s.notes ?? "");
+  };
+
+  const handleSubmit = async () => {
+    if (kind === "adhoc" && !adhocDate) { toast.error("Select a date."); return; }
+    setSaving(true);
+    try {
+      const body: Record<string, unknown> = {
+        kind, startTime, endTime: endTime || null, notes: notes.trim() || null,
+      };
+      if (kind === "recurring") {
+        body.dayOfWeek = parseInt(dayOfWeek, 10);
+        const wom = parseInt(weekOfMonth, 10);
+        if (wom > 0) body.weekOfMonth = wom;
+      } else {
+        body.adhocDate = new Date(adhocDate + "T00:00:00Z").toISOString();
+      }
+      const url = editingId
+        ? `/api/admin/programs/${programId}/schedules/${editingId}`
+        : `/api/admin/programs/${programId}/schedules`;
+      const method = editingId ? "PUT" : "POST";
+      const res = await fetch(url, {
+        method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error ?? `status ${res.status}`);
+      }
+      toast.success(editingId ? "Schedule updated" : "Schedule added");
+      resetForm();
+      await loadSchedules();
+      await onChanged();
+    } catch (e) {
+      toast.error("Failed to save schedule", {
+        description: e instanceof Error ? e.message : undefined,
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (scheduleId: string) => {
+    try {
+      const res = await fetch(`/api/admin/programs/${programId}/schedules/${scheduleId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      toast.success("Schedule removed");
+      await loadSchedules();
+      await onChanged();
+    } catch (e) {
+      toast.error("Failed to delete", { description: e instanceof Error ? e.message : undefined });
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto scroll-thin">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Clock className="h-5 w-5 text-primary" />
+            Program Schedules — {programName}
+          </DialogTitle>
+          <DialogDescription>
+            These schedules apply to ALL classes in this program.
+          </DialogDescription>
+        </DialogHeader>
+
+        {/* Existing schedules */}
+        <div className="space-y-2">
+          {loading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+            </div>
+          ) : schedules.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4 text-center">No schedules yet. Add one below.</p>
+          ) : (
+            <ul className="space-y-1">
+              {schedules.map((s) => (
+                <li key={s.id} className="flex items-center justify-between gap-2 rounded-md border p-2 text-sm">
+                  <div className="min-w-0">
+                    <span className="font-medium">{formatSchedule(s)}</span>
+                    {s.notes && <p className="text-xs text-muted-foreground truncate">{s.notes}</p>}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Button size="icon" variant="ghost" aria-label="Edit" onClick={() => startEdit(s)}>
+                      <PencilLine className="h-4 w-4" />
+                    </Button>
+                    <button
+                      type="button" aria-label="Delete"
+                      onClick={() => void handleDelete(s.id)}
+                      className="inline-flex items-center justify-center h-9 w-9 rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {/* Add / Edit form */}
+        <div className="border-t pt-3 space-y-3">
+          <p className="text-sm font-medium">{editingId ? "Edit schedule" : "Add schedule"}</p>
+          <div className="flex gap-2">
+            <Button size="sm" variant={kind === "recurring" ? "default" : "outline"} onClick={() => setKind("recurring")} type="button">Recurring (weekly/monthly)</Button>
+            <Button size="sm" variant={kind === "adhoc" ? "default" : "outline"} onClick={() => setKind("adhoc")} type="button">One-off date</Button>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {kind === "recurring" ? (
+              <>
+                <div className="space-y-1">
+                  <Label className="text-xs">Day of week</Label>
+                  <Select value={dayOfWeek} onValueChange={setDayOfWeek}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {DAYS.map((d, i) => (<SelectItem key={i} value={String(i)}>{d}</SelectItem>))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Repeat</Label>
+                  <Select value={weekOfMonth} onValueChange={setWeekOfMonth}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0">Every week</SelectItem>
+                      <SelectItem value="1">1st of month</SelectItem>
+                      <SelectItem value="2">2nd of month</SelectItem>
+                      <SelectItem value="3">3rd of month</SelectItem>
+                      <SelectItem value="4">4th of month</SelectItem>
+                      <SelectItem value="5">Last of month</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
+            ) : (
+              <div className="space-y-1">
+                <Label className="text-xs">Date</Label>
+                <Input type="date" value={adhocDate} onChange={(e) => setAdhocDate(e.target.value)} />
+              </div>
+            )}
+            <div className="space-y-1">
+              <Label className="text-xs">Start time</Label>
+              <Input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">End time (optional)</Label>
+              <Input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Notes (optional)</Label>
+            <Input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={2000} placeholder="e.g. School holidays only" />
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" onClick={() => void handleSubmit()} disabled={saving}>
+              {saving && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
+              {editingId ? "Update" : "Add schedule"}
+            </Button>
+            {editingId && <Button size="sm" variant="ghost" onClick={resetForm}>Cancel edit</Button>}
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

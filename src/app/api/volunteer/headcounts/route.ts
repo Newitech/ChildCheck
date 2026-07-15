@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import type { Prisma } from "@prisma/client";
 
 import { db } from "@/lib/db";
 import { getCurrentUser, hasPermission } from "@/lib/auth";
@@ -47,7 +48,7 @@ export async function GET(req: Request) {
     );
   }
 
-  const where: Record<string, unknown> = {
+  const where: Prisma.HeadcountLogWhereInput = {
     createdAt: { gte: dayStart, lt: dayEnd },
   };
   if (roomId) where.roomId = roomId;
@@ -57,11 +58,9 @@ export async function GET(req: Request) {
     where,
     orderBy: { createdAt: "desc" },
     take: 100,
-    include: {
-      // reportedById → user → person for the reporter's name
-      // (we don't model a back-relation from HeadcountLog to User to keep the
-      // schema lean; do a manual lookup below if needed)
-    },
+    // reportedById → user → person for the reporter's name
+    // (we don't model a back-relation from HeadcountLog to User to keep the
+    // schema lean; do a manual lookup below if needed)
   });
 
   // Resolve reporter names in one query.

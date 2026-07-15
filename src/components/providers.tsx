@@ -26,6 +26,12 @@ export interface PublicConfig {
   terminology: Terminology;
   flags: Record<string, boolean>;
   orgType?: string;
+  /** JS getDay() index of the first day of the week (0=Sun .. 6=Sat). */
+  weekStartsOn?: 0 | 1 | 2 | 3 | 4 | 5 | 6;
+  /** Daily check-out code length (default 3). */
+  dailyCodeLength?: number;
+  /** Daily check-out code character set: "alphanumeric" | "numeric". */
+  dailyCodeCharset?: "alphanumeric" | "numeric";
   /**
    * Realtime (Socket.io) mini-service port, read from REALTIME_PORT (default
    * 3003) by /api/config. The client uses this in `io("/?XTransformPort=<port>")`
@@ -45,7 +51,6 @@ const ConfigContext = createContext<ConfigContextValue | null>(null);
 
 // Exported for the useConfig hook to consume. Not part of the public API.
 export { ConfigContext };
-export type { PublicConfig };
 
 function ConfigProvider({ children }: { children: ReactNode }) {
   const [config, setConfig] = useState<PublicConfig | null>(null);

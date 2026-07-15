@@ -108,7 +108,7 @@ export default async function VolunteerHomePage() {
     <VolunteerDashboard
       user={{
         id: user.id,
-        name: user.name,
+        name: user.name ?? null,
         username: user.username,
         roles: user.roles,
       }}

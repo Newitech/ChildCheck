@@ -14,7 +14,8 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { ChevronDown, BookOpen } from "lucide-react";
 
 interface MappingRow {
@@ -153,12 +154,18 @@ export function FieldMappingReference() {
                   </CardDescription>
                 </div>
               </div>
-              <Button variant="ghost" size="sm" className="shrink-0">
+              {/* Styled to look like a button but is a <span>: the whole header
+                  is already a <button> via CollapsibleTrigger, so a nested real
+                  <button> would be invalid HTML (button-in-button). */}
+              <span
+                className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "shrink-0")}
+                aria-hidden="true"
+              >
                 <ChevronDown
                   className={`h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`}
                 />
                 {open ? "Hide" : "Show"}
-              </Button>
+              </span>
             </button>
           </CollapsibleTrigger>
         </CardHeader>

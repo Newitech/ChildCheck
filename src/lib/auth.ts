@@ -10,6 +10,10 @@ import {
   isValidPin,
 } from "@/lib/password";
 import { logAudit } from "@/lib/audit";
+import { ALL_STAFF_ROLES } from "@/lib/person-roles";
+
+/** Set of known staff role strings (for filtering in getRolesForUser). */
+const ALL_STAFF_ROLE_NAMES = new Set<string>(ALL_STAFF_ROLES);
 
 /**
  * Role → permission matrix for ChildCheck.
@@ -65,10 +69,27 @@ export function hasPermission(roles: string[], perm: string): boolean {
   return false;
 }
 
-/** All role strings assigned to a user. */
+/**
+ * All role strings assigned to a user's Person (roles live on PersonRole, not
+ * User). Defense-in-depth: only known staff role strings are returned, so a
+ * stray PersonRole row with an unknown role can't widen access. This is only
+ * ever called for an authenticated User row, so login-required roles
+ * (Admin/PeopleManager) are inherently valid here.
+ */
 export async function getRolesForUser(userId: string): Promise<string[]> {
-  const rows = await db.userRole.findMany({ where: { userId } });
-  return rows.map((r) => r.role);
+  const user = await db.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      person: {
+        select: { roles: { select: { role: true } } },
+      },
+    },
+  });
+  if (!user) return [];
+  return user.person.roles
+    .map((r) => r.role)
+    .filter((r) => ALL_STAFF_ROLE_NAMES.has(r));
 }
 
 // ---------------------------------------------------------------------------
@@ -164,17 +185,29 @@ export const authOptions: NextAuthOptions = {
         // error — see PLAN.md §5 / auth spec.
         const user = await db.user.findFirst({
           where: { username: { equals: input.username } },
-          include: { roles: true, person: true },
+          include: {
+            person: {
+              select: {
+                firstName: true,
+                lastName: true,
+                // The guardian/kiosk PIN now lives on Person (not User).
+                pinHash: true,
+                // Roles live on PersonRole (not UserRole).
+                roles: { select: { role: true } },
+              },
+            },
+          },
         });
         if (!user) return null;
         if (user.status !== "Active") return null;
         if (!user.person) return null;
 
-        // PIN login: input looks like a PIN (4–6 digits) AND the user has a pinHash.
-        // Otherwise fall back to full password verification.
+        // PIN login: input looks like a PIN (4–6 digits) AND the Person has a
+        // pinHash. Otherwise fall back to full password verification.
+        const personPinHash = user.person.pinHash;
         let ok = false;
-        if (isValidPin(input.password) && user.pinHash) {
-          ok = await verifyPin(input.password, user.pinHash);
+        if (isValidPin(input.password) && personPinHash) {
+          ok = await verifyPin(input.password, personPinHash);
         } else {
           ok = await verifyPassword(input.password, user.passwordHash);
         }
@@ -201,7 +234,9 @@ export const authOptions: NextAuthOptions = {
           id: user.id,
           name: `${user.person.firstName} ${user.person.lastName}`,
           username: user.username,
-          roles: user.roles.map((r) => r.role),
+          roles: user.person.roles
+            .map((r) => r.role)
+            .filter((r) => ALL_STAFF_ROLE_NAMES.has(r)),
         };
       },
     }),

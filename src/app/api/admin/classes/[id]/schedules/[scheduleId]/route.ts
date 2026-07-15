@@ -13,6 +13,7 @@ const updateSchema = z
   .object({
     kind: z.enum(["recurring", "adhoc"]).optional(),
     dayOfWeek: z.number().int().min(0).max(6).optional().nullable(),
+    weekOfMonth: z.number().int().min(1).max(5).optional().nullable(),
     startTime: z
       .string()
       .trim()
@@ -110,6 +111,7 @@ export async function PUT(
     data: {
       ...(p.kind !== undefined ? { kind: p.kind } : {}),
       ...(p.dayOfWeek !== undefined ? { dayOfWeek: p.dayOfWeek } : {}),
+      ...(p.weekOfMonth !== undefined ? { weekOfMonth: p.weekOfMonth } : {}),
       ...(p.startTime !== undefined ? { startTime: p.startTime } : {}),
       ...(p.endTime !== undefined ? { endTime: p.endTime } : {}),
       ...(p.adhocDate !== undefined ? { adhocDate } : {}),
