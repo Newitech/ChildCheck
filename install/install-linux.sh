@@ -211,13 +211,13 @@ if [ -n "${SOURCE_PATH}" ]; then
 else
   # Download.
   VERSION="${CHILDCHECK_VERSION:-latest}"
-  URL_BASE="${CHILDCHECK_URL_BASE:-https://github.com/Newitech/ChildCheck/releases/download}"
+  URL_BASE="${CHILDCHECK_URL_BASE:-https://github.com/Newitech/ChildCheck/releases}"
   if [ -n "${CHILDCHECK_URL:-}" ]; then
     URL="${CHILDCHECK_URL}"
   elif [ "${VERSION}" = "latest" ]; then
-    URL="${URL_BASE}/latest/childcheck-${TARGET}.tar.gz"
+    URL="${URL_BASE}/latest/download/childcheck-${TARGET}.tar.gz"
   else
-    URL="${URL_BASE}/v${VERSION}/childcheck-${TARGET}.tar.gz"
+    URL="${URL_BASE}/download/v${VERSION}/childcheck-${TARGET}.tar.gz"
   fi
   step "Downloading ${URL}"
   if command -v curl >/dev/null 2>&1; then

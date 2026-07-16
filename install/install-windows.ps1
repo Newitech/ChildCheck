@@ -30,7 +30,7 @@ param(
     [string]$Source = "",
     [string]$Version = "latest",
     [string]$InstallDir = "C:\Program Files\ChildCheck",
-    [string]$UrlBase = "https://github.com/Newitech/ChildCheck/releases/download",
+    [string]$UrlBase = "https://github.com/Newitech/ChildCheck/releases",
     [switch]$Tls
 )
 
@@ -125,9 +125,9 @@ try {
         }
     } else {
         if ($Version -eq "latest") {
-            $url = "$UrlBase/latest/childcheck-$target.tar.gz"
+            $url = "$UrlBase/latest/download/childcheck-$target.tar.gz"
         } else {
-            $url = "$UrlBase/v$Version/childcheck-$target.tar.gz"
+            $url = "$UrlBase/download/v$Version/childcheck-$target.tar.gz"
         }
         Write-Step "Downloading $url"
         $tarball = Join-Path $workDir "childcheck.tar.gz"
