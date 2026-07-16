@@ -218,9 +218,10 @@ if [[ "$CREATE_TAG" = true ]]; then
   # Create annotated tag
   git tag -a "v$VERSION" -m "Release v$VERSION"
 
-  # Push the tag (triggers the release CI workflow)
+  # Push the tag (triggers the release CI workflow). Force in case the tag
+  # already exists on the remote (re-release scenario).
   echo ">>> Pushing tag v$VERSION to trigger release CI..."
-  git push origin "v$VERSION" 2>&1
+  git push origin "v$VERSION" --force 2>&1
 
   echo ""
   echo "  ✓ Tag v$VERSION pushed. The release workflow will:"
