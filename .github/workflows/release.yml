@@ -45,6 +45,7 @@ env:
   # The image will be pushed to ghcr.io/<GHCR_ORG>/childcheck.
   GHCR_ORG: newitech
   IMAGE_NAME: childcheck
+  BUN_INSTALL_FROZEN_LOCKFILE: "false"
 
 permissions:
   contents: write       # to create the GitHub Release + upload assets
@@ -73,6 +74,8 @@ jobs:
 
       - name: Install dependencies
         run: bun install --no-verify
+        env:
+          BUN_INSTALL_FROZEN_LOCKFILE: "false"
 
       - name: Build binary (${{ matrix.target }})
         run: bash scripts/build-binaries.sh ${{ matrix.target }}
