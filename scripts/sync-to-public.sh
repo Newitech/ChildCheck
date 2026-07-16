@@ -4,9 +4,15 @@
 #
 # Usage:
 #   bash scripts/sync-to-public.sh [version]
+#   bash scripts/sync-to-public.sh [version] --tag
+#   bash scripts/sync-to-public.sh --no-push
 #
 #   version  The new version number to set (e.g. "0.9", "1.0.0").
 #            If omitted, the script prompts for it.
+#
+#   --tag    Also create a v<version> git tag + push it to trigger the release
+#            CI (builds binaries + Docker image + GitHub Release).
+#            If omitted, the script asks interactively whether to tag.
 #
 # What it does:
 #   1. rsync from ChildCheck-Dev → ChildCheck (excluding dev-only files)
@@ -39,13 +45,26 @@ PUBLIC_REMOTE="https://github.com/Newitech/ChildCheck.git"
 # --- Parse args ---
 VERSION="${1:-}"
 NO_PUSH=false
+CREATE_TAG=false
 if [[ "${1:-}" == "--no-push" ]]; then
   NO_PUSH=true
+  VERSION=""
+fi
+if [[ "${1:-}" == "--tag" ]]; then
+  CREATE_TAG=true
   VERSION=""
 fi
 
 if [[ -z "$VERSION" ]]; then
   read -rp "Enter the new version number (e.g. 0.9, 1.0.0): " VERSION
+fi
+
+# If --tag was passed, prompt whether to also cut a release tag
+if [[ "$CREATE_TAG" = false ]]; then
+  read -rp "Create a v$VERSION release tag + trigger CI? [y/N] " CREATE_TAG_ANSWER
+  if [[ "$CREATE_TAG_ANSWER" =~ ^[Yy]$ ]]; then
+    CREATE_TAG=true
+  fi
 fi
 
 echo "============================================"
@@ -54,6 +73,7 @@ echo "  Version: $VERSION"
 echo "  Dev repo:   $DEV_REPO"
 echo "  Public repo: $PUBLIC_REPO"
 echo "  Push: $([ "$NO_PUSH" = true ] && echo 'NO (review locally)' || echo 'YES')"
+echo "  Release tag: $([ "$CREATE_TAG" = true ] && echo "YES (v$VERSION)" || echo 'NO')"
 echo "============================================"
 echo ""
 
@@ -185,3 +205,29 @@ echo ""
 echo "============================================"
 echo "  ✓ Sync complete! v$VERSION pushed to main."
 echo "============================================"
+
+# --- Step 7: Create release tag (optional) ---
+if [[ "$CREATE_TAG" = true ]]; then
+  echo ""
+  echo ">>> Creating v$VERSION release tag..."
+  cd "$PUBLIC_REPO"
+
+  # Delete the tag locally if it already exists (force re-create)
+  git tag -d "v$VERSION" 2>/dev/null || true
+
+  # Create annotated tag
+  git tag -a "v$VERSION" -m "Release v$VERSION"
+
+  # Push the tag (triggers the release CI workflow)
+  echo ">>> Pushing tag v$VERSION to trigger release CI..."
+  git push origin "v$VERSION" 2>&1
+
+  echo ""
+  echo "  ✓ Tag v$VERSION pushed. The release workflow will:"
+  echo "    - Build 4 platform binaries (linux-x64, linux-arm64, macos-arm64, windows-x64)"
+  echo "    - Build + push Docker image to ghcr.io/Newitech/childcheck"
+  echo "    - Create a GitHub Release with downloadable tarballs"
+  echo ""
+  echo "  Check progress: https://github.com/Newitech/ChildCheck/actions"
+  echo "  View release:   https://github.com/Newitech/ChildCheck/releases/tag/v$VERSION"
+fi
