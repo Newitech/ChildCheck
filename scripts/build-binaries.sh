@@ -88,7 +88,7 @@ fi
 # --- 1. Install root deps if needed ----------------------------------------
 if [ ! -d "node_modules" ]; then
   echo "[build] installing root deps..."
-  bun install
+  bun install --no-verify
 fi
 
 # --- 2. Generate Prisma client + build Next.js ------------------------------
