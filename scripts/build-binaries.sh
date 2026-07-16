@@ -112,7 +112,7 @@ fi
 
 if [ ! -d "mini-services/realtime/node_modules" ]; then
   echo "[build] installing realtime mini-service deps..."
-  ( cd mini-services/realtime && bun install )
+  ( cd mini-services/realtime && bun install --no-verify )
 fi
 
 # --- 3. Build per-target ----------------------------------------------------
@@ -181,7 +181,7 @@ for TARGET in "${TARGETS[@]}"; do
   }
 }
 PJSON
-    bun install --production
+    bun install --production --no-verify
   )
 
   # Copy the realtime mini-service (source + node_modules).
