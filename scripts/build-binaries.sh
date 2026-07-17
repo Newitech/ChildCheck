@@ -87,13 +87,9 @@ fi
 
 # --- 1. Install root deps if needed ----------------------------------------
 # In CI, the workflow already runs `bun install` before calling this script.
-# Locally, the developer runs `bun install` before building. We only install
-# here as a fallback — and we delete the lockfile first to avoid the
-# "lockfile had changes, but lockfile is frozen" error that occurs when
-# the Bun version on this machine differs from the one that generated bun.lock.
+# Locally, the developer runs `bun install` before building.
 if [ ! -d "node_modules" ]; then
   echo "[build] installing root deps..."
-  rm -f bun.lock
   bun install
 fi
 
@@ -112,7 +108,7 @@ fi
 
 if [ ! -d "mini-services/realtime/node_modules" ]; then
   echo "[build] installing realtime mini-service deps..."
-  ( cd mini-services/realtime && bun install --no-verify )
+  ( cd mini-services/realtime && bun install )
 fi
 
 # --- 3. Build per-target ----------------------------------------------------
@@ -181,7 +177,7 @@ for TARGET in "${TARGETS[@]}"; do
   }
 }
 PJSON
-    bun install --production --no-verify
+    bun install --production
   )
 
   # Copy the realtime mini-service (source + node_modules).
