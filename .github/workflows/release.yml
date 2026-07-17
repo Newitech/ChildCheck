@@ -79,6 +79,8 @@ jobs:
 
       - name: Build binary (${{ matrix.target }})
         run: bash scripts/build-binaries.sh ${{ matrix.target }}
+        env:
+          BUN_INSTALL_FROZEN_LOCKFILE: "false"
 
       - name: Verify tarball exists
         run: |
