@@ -7,7 +7,7 @@
 #   2. Installs the pre-built binary to /opt/childcheck/ (or uses an existing
 #      install if present, asking before overwriting).
 #   3. Creates /var/lib/childcheck/{data,db,config} with correct perms.
-#   4. Writes a default .env (prompting for NEXTAUTH_SECRET if not set).
+#   4. Writes a default .env (auto-generating secrets unless --interactive).
 #   5. Writes /etc/systemd/system/childcheck.service.
 #   6. Enables + starts the service.
 #   7. Prints the URL + first-run setup instructions.
@@ -20,15 +20,15 @@
 #   sudo bash install/install-linux.sh /path/to/tarball      # use local tarball
 #   sudo bash install/install-linux.sh /path/to/dir          # use unpacked dir
 #   sudo bash install/install-linux.sh --tls                 # also install + configure Caddy for HTTPS
+#   sudo bash install/install-linux.sh -i                    # interactive mode (prompt for ports/URL/secrets)
+#   sudo bash install/install-linux.sh --port=8080           # use a specific web port
+#   sudo bash install/install-linux.sh --port=8080 --realtime-port=8081 --tls
 #
 # Flags:
-#   --tls          Opt-in TLS termination via Caddy. Installs Caddy from the
-#                  official apt repo, generates /etc/caddy/Caddyfile from
-#                  install/Caddyfile.domain (if you provide a domain) or
-#                  install/Caddyfile.lan (if blank — self-signed internal CA),
-#                  enables + starts the `caddy` systemd service, and rewrites
-#                  NEXTAUTH_URL to https://<domain-or-host>/. Without this
-#                  flag the install stays on plain HTTP (unchanged).
+#   --tls                 Opt-in TLS termination via Caddy.
+#   -i, --interactive     Prompt for ports, URL, and secrets (default: auto).
+#   --port=NNNN           Set the web server port (default: 3000).
+#   --realtime-port=NNNN  Set the realtime port (default: 3003).
 #
 # Environment variables (optional):
 #   CHILDCHECK_VERSION     Version to download (default: latest)
@@ -44,15 +44,26 @@ safe_read() {
   read -r "$@" </dev/tty 2>/dev/null || true
 }
 
-# Parse `--tls` flag (anywhere in argv). Remaining args (after shift) become
-# the source-path / version args handled below.
+# Parse flags (anywhere in argv). Remaining args become the source-path / version.
 TLS_ENABLED=0
+INTERACTIVE=0
+CUSTOM_PORT=""
+CUSTOM_REALTIME_PORT=""
 NEW_ARGS=()
 for arg in "$@"; do
   case "${arg}" in
     --tls) TLS_ENABLED=1 ;;
+    --interactive|-i) INTERACTIVE=1 ;;
+    --port=*) CUSTOM_PORT="${arg#--port=}" ;;
+    --realtime-port=*) CUSTOM_REALTIME_PORT="${arg#--realtime-port=}" ;;
     --help|-h)
       sed -n '2,30p' "$0"
+      echo ""
+      echo "Flags:"
+      echo "  --tls                Install + configure Caddy for HTTPS"
+      echo "  -i, --interactive    Prompt for ports, URL, and secrets (default: auto)"
+      echo "  --port=NNNN          Set the web server port (default: 3000)"
+      echo "  --realtime-port=NNNN Set the realtime port (default: 3003)"
       exit 0
       ;;
     *) NEW_ARGS+=("${arg}") ;;
@@ -143,42 +154,20 @@ port_in_use() {
 
 # prompt_port(default, label) → echoes the chosen port number.
 # If the default port is already in use, prompts the user for an alternative
-# and validates the new value (numeric + free). Loops until a free port is
-# provided (or the user explicitly accepts the default — which then fails
-# later when the service tries to bind).
+# and validates the new value. If the default is in use, auto-picks the next
+# free port without prompting (non-interactive friendly for curl|bash installs).
 prompt_port() {
   local default="$1" label="$2"
   local port="${default}"
 
   if port_in_use "${default}"; then
     warn "port ${default} is already in use (${label})."
-    # Suggest the next port up as a default alternative.
     local suggest=$(( default + 1 ))
     while port_in_use "${suggest}"; do
       suggest=$(( suggest + 1 ))
     done
-    safe_read -p "Use an alternative port for ${label}? [${suggest}]: " alt
-    port="${alt:-${suggest}}"
-    # Validate: numeric + in range.
-    while ! [[ "${port}" =~ ^[0-9]+$ ]] || [ "${port}" -lt 1 ] || [ "${port}" -gt 65535 ]; do
-      err "'${port}' is not a valid port (must be 1-65535)."
-      safe_read -p "${label} port [${suggest}]: " alt
-      port="${alt:-${suggest}}"
-    done
-    # Validate: free.
-    while port_in_use "${port}"; do
-      err "port ${port} is also in use."
-      safe_read -p "${label} port [${suggest}]: " alt
-      port="${alt:-${suggest}}"
-      while ! [[ "${port}" =~ ^[0-9]+$ ]] || [ "${port}" -lt 1 ] || [ "${port}" -gt 65535 ]; do
-        err "'${port}' is not a valid port (must be 1-65535)."
-        safe_read -p "${label} port [${suggest}]: " alt
-        port="${alt:-${suggest}}"
-      done
-    done
-    if [ "${port}" != "${default}" ]; then
-      info "using ${label} port ${port} (default ${default} was in use)."
-    fi
+    port="${suggest}"
+    info "using ${label} port ${port} (default ${default} was in use)."
   fi
   echo "${port}"
 }
@@ -322,10 +311,26 @@ if [ -f "${ENV_FILE}" ]; then
   REALTIME_PORT="$(grep -E '^REALTIME_PORT=' "${ENV_FILE}" | cut -d= -f2- || true)"
   REALTIME_PORT="${REALTIME_PORT:-3003}"
 else
-  # Prompt for ports if the defaults are in use.
   step "Choosing ports (default: web 3000, realtime 3003)"
-  PORT="$(prompt_port 3000 "web server")" || PORT=3000
-  REALTIME_PORT="$(prompt_port 3003 "realtime (Socket.io)")" || REALTIME_PORT=3003
+
+  # --port / --realtime-port flags override everything.
+  if [ -n "${CUSTOM_PORT}" ]; then
+    PORT="${CUSTOM_PORT}"
+  elif [ "${INTERACTIVE}" -eq 1 ]; then
+    PORT="$(prompt_port 3000 "web server")" || PORT=3000
+  else
+    PORT="$(prompt_port 3000 "web server")" || PORT=3000
+  fi
+
+  if [ -n "${CUSTOM_REALTIME_PORT}" ]; then
+    REALTIME_PORT="${CUSTOM_REALTIME_PORT}"
+  elif [ "${INTERACTIVE}" -eq 1 ]; then
+    REALTIME_PORT="$(prompt_port 3003 "realtime (Socket.io)")" || REALTIME_PORT=3003
+  else
+    REALTIME_PORT="$(prompt_port 3003 "realtime (Socket.io)")" || REALTIME_PORT=3003
+  fi
+
+  info "PORT=${PORT}  REALTIME_PORT=${REALTIME_PORT}"
 
   # Determine the public URL. Default to the box's primary IP + chosen PORT.
   DEFAULT_URL="http://localhost:${PORT}"
@@ -336,11 +341,17 @@ else
     fi
   fi
 
-  safe_read -p "Public URL [${DEFAULT_URL}]: " NEXTAUTH_URL
-  NEXTAUTH_URL="${NEXTAUTH_URL:-${DEFAULT_URL}}"
+  if [ "${INTERACTIVE}" -eq 1 ]; then
+    safe_read -p "Public URL [${DEFAULT_URL}]: " NEXTAUTH_URL
+    NEXTAUTH_URL="${NEXTAUTH_URL:-${DEFAULT_URL}}"
+    safe_read -p "NEXTAUTH_SECRET (blank = auto-generate): " NEXTAUTH_SECRET
+  else
+    NEXTAUTH_URL="${DEFAULT_URL}"
+    NEXTAUTH_SECRET=""
+  fi
+  info "NEXTAUTH_URL: ${NEXTAUTH_URL}"
 
-  # NEXTAUTH_SECRET: prompt or generate.
-  safe_read -p "NEXTAUTH_SECRET (blank = auto-generate): " NEXTAUTH_SECRET
+  # NEXTAUTH_SECRET: auto-generate if blank.
   if [ -z "${NEXTAUTH_SECRET}" ]; then
     if command -v openssl >/dev/null 2>&1; then
       NEXTAUTH_SECRET="$(openssl rand -hex 32)"
@@ -350,8 +361,12 @@ else
     info "generated NEXTAUTH_SECRET."
   fi
 
-  # CHILDCHECK_DATA_KEY: prompt or generate.
-  safe_read -p "CHILDCHECK_DATA_KEY for photo/backup encryption (blank = auto-generate): " CHILDCHECK_DATA_KEY
+  # CHILDCHECK_DATA_KEY: auto-generate.
+  if [ "${INTERACTIVE}" -eq 1 ]; then
+    safe_read -p "CHILDCHECK_DATA_KEY (blank = auto-generate): " CHILDCHECK_DATA_KEY
+  else
+    CHILDCHECK_DATA_KEY=""
+  fi
   if [ -z "${CHILDCHECK_DATA_KEY}" ]; then
     if command -v openssl >/dev/null 2>&1; then
       CHILDCHECK_DATA_KEY="$(openssl rand -hex 32)"
@@ -359,6 +374,7 @@ else
       CHILDCHECK_DATA_KEY="$(head -c 32 /dev/urandom | xxd -p | tr -d '\n')"
     fi
     info "generated CHILDCHECK_DATA_KEY (SAVE THIS — losing it loses access to existing photos/backups)."
+  fi
   fi
 
   cat > "${ENV_FILE}" <<EOF
