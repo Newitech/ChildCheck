@@ -32,7 +32,8 @@ FROM oven/bun:1.3-debian AS builder
 
 WORKDIR /app
 
-# Install deps first (cached layer). Copy manifests only (lockfile optional).
+# Install deps first (cached layer). Copy manifests only (no lockfile — it's
+# not tracked in the repo to avoid version-mismatch crashes in CI).
 COPY package.json ./
 COPY mini-services/realtime/package.json ./mini-services/realtime/
 
@@ -42,12 +43,16 @@ RUN bun install
 # Copy the rest of the source.
 COPY . .
 
+# Delete any lockfile that bun install may have created, so bun run doesn't
+# crash with "lockfile is frozen" in CI environments.
+RUN rm -f bun.lock
+
 # Generate the Prisma client (the build needs @prisma/client).
-RUN bun run db:generate
+RUN bun run --no-install db:generate
 
 # Build Next.js. package.json "build" script also copies .next/static + public
 # into .next/standalone/ (see package.json).
-RUN bun run build
+RUN bun run --no-install build
 
 # Install the realtime mini-service deps (so we can copy node_modules into the
 # runtime image without re-installing there).
