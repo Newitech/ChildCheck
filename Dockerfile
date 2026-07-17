@@ -32,12 +32,12 @@ FROM oven/bun:1.3-debian AS builder
 
 WORKDIR /app
 
-# Install deps first (cached layer). Copy lockfile + manifests only.
-COPY package.json bun.lock ./
-COPY mini-services/realtime/package.json mini-services/realtime/bun.lock ./mini-services/realtime/
+# Install deps first (cached layer). Copy manifests only (lockfile optional).
+COPY package.json ./
+COPY mini-services/realtime/package.json ./mini-services/realtime/
 
 # Install root deps (including devDeps needed for the build: next, prisma, eslint).
-RUN bun install --frozen-lockfile
+RUN bun install
 
 # Copy the rest of the source.
 COPY . .
