@@ -192,13 +192,14 @@ jobs:
 
       - name: Summary
         run: |
+          TAG="${{ github.ref_name || inputs.tag }}"
           cat <<EOF >> "$GITHUB_STEP_SUMMARY"
-          ## Release ${{ github.ref_name || inputs.tag }} published ✅
+          ## Release ${TAG} published ✅
 
           - **Binaries**: 4 tarballs attached to the GitHub Release
             (linux-x64, linux-arm64, macos-arm64, windows-x64).
           - **Docker image**:
-            \`ghcr.io/${{ env.GHCR_ORG }}/${{ env.IMAGE_NAME }}:${(github.ref_name || inputs.tag) && (github.ref_name || inputs.tag) || 'latest'}\`
+            \`ghcr.io/${{ env.GHCR_ORG }}/${{ env.IMAGE_NAME }}:${TAG}\`
             + \`:latest\` pushed to GHCR.
           - **Update instructions**: see
             [docs/deployment/updating.md](https://github.com/${{ env.GHCR_ORG }}/childcheck/blob/main/docs/deployment/updating.md).
