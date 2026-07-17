@@ -91,7 +91,6 @@ COPY --from=builder --chown=childcheck:childcheck /app/public ./public
 #     `prisma db push --skip-generate` to apply the schema to SQLite on boot.
 COPY --from=builder --chown=childcheck:childcheck /app/prisma ./prisma
 COPY --from=builder --chown=childcheck:childcheck /app/package.json ./package.json
-COPY --from=builder --chown=childcheck:childcheck /app/bun.lock ./bun.lock
 # Copy the ENTIRE node_modules from the builder stage. This includes:
 #   - prisma CLI (needed for db:push at boot)
 #   - @prisma/client + the generated client (.prisma) — needed by the app
