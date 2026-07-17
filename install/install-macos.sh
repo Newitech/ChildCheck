@@ -29,6 +29,11 @@
 # =============================================================================
 set -euo pipefail
 
+# When run via curl|bash, /dev/tty may not be available.
+safe_read() {
+  read -r "$@" </dev/tty 2>/dev/null || true
+}
+
 # Parse `--tls` flag (anywhere in argv).
 TLS_ENABLED=0
 NEW_ARGS=()
@@ -106,20 +111,20 @@ prompt_port() {
     while port_in_use "${suggest}"; do
       suggest=$(( suggest + 1 ))
     done
-    read -r -p "Use an alternative port for ${label}? [${suggest}]: " alt </dev/tty || true
+    safe_read -p "Use an alternative port for ${label}? [${suggest}]: " alt
     port="${alt:-${suggest}}"
     while ! [[ "${port}" =~ ^[0-9]+$ ]] || [ "${port}" -lt 1 ] || [ "${port}" -gt 65535 ]; do
       err "'${port}' is not a valid port (must be 1-65535)."
-      read -r -p "${label} port [${suggest}]: " alt </dev/tty || true
+      safe_read -p "${label} port [${suggest}]: " alt
       port="${alt:-${suggest}}"
     done
     while port_in_use "${port}"; do
       err "port ${port} is also in use."
-      read -r -p "${label} port [${suggest}]: " alt </dev/tty || true
+      safe_read -p "${label} port [${suggest}]: " alt
       port="${alt:-${suggest}}"
       while ! [[ "${port}" =~ ^[0-9]+$ ]] || [ "${port}" -lt 1 ] || [ "${port}" -gt 65535 ]; do
         err "'${port}' is not a valid port (must be 1-65535)."
-        read -r -p "${label} port [${suggest}]: " alt </dev/tty || true
+        safe_read -p "${label} port [${suggest}]: " alt
         port="${alt:-${suggest}}"
       done
     done
@@ -195,7 +200,7 @@ xattr -dr com.apple.quarantine "${SRC_DIR}" 2>/dev/null || true
 step "Installing to ${INSTALL_DIR}"
 if [ -d "${INSTALL_DIR}" ] && [ -f "${INSTALL_DIR}/${BINARY_NAME}" ]; then
   warn "an existing install is present at ${INSTALL_DIR}."
-  read -r -p "Overwrite? [y/N] " OVERWRITE </dev/tty || true
+  safe_read -p "Overwrite? [y/N] " OVERWRITE
   if [[ ! "${OVERWRITE}" =~ ^[Yy]$ ]]; then
     info "keeping existing install. Aborting."
     exit 0
@@ -252,16 +257,16 @@ else
     fi
   fi
 
-  read -r -p "Public URL [${DEFAULT_URL}]: " NEXTAUTH_URL </dev/tty || true
+  safe_read -p "Public URL [${DEFAULT_URL}]: " NEXTAUTH_URL
   NEXTAUTH_URL="${NEXTAUTH_URL:-${DEFAULT_URL}}"
 
-  read -r -p "NEXTAUTH_SECRET (blank = auto-generate): " NEXTAUTH_SECRET </dev/tty || true
+  safe_read -p "NEXTAUTH_SECRET (blank = auto-generate): " NEXTAUTH_SECRET
   if [ -z "${NEXTAUTH_SECRET}" ]; then
     NEXTAUTH_SECRET="$(openssl rand -hex 32)"
     info "generated NEXTAUTH_SECRET."
   fi
 
-  read -r -p "CHILDCHECK_DATA_KEY for photo/backup encryption (blank = auto-generate): " CHILDCHECK_DATA_KEY </dev/tty || true
+  safe_read -p "CHILDCHECK_DATA_KEY for photo/backup encryption (blank = auto-generate): " CHILDCHECK_DATA_KEY
   if [ -z "${CHILDCHECK_DATA_KEY}" ]; then
     CHILDCHECK_DATA_KEY="$(openssl rand -hex 32)"
     info "generated CHILDCHECK_DATA_KEY — SAVE THIS."
@@ -419,7 +424,7 @@ if [ "${TLS_ENABLED}" -eq 1 ]; then
   echo "    - Blank: Caddy uses its built-in internal CA (self-signed). Import"
   echo "      Caddy's root cert into each client's trust store — see"
   echo "      install/Caddyfile.lan for the per-OS commands."
-  read -r -p "  Domain [blank for LAN-only]: " TLS_DOMAIN </dev/tty || true
+  safe_read -p "  Domain [blank for LAN-only]: " TLS_DOMAIN
   TLS_DOMAIN="${TLS_DOMAIN:-}"
 
   # Locate the Caddyfile templates shipped alongside this script.

@@ -1,95 +1,42 @@
-# =============================================================================
-# ChildCheck — .gitignore (PUBLIC repo)
-#
-# This is the .gitignore for the PUBLIC GitHub repo (install scripts, docs,
-# release artifacts, source). The PRIVATE dev repo (which contains the full
-# project + worklog/plan/agent-ctx) has its own .gitignore that does NOT
-# ignore the dev-only context files.
-#
-# The dev-only files (worklog.md, PLAN.md, MORNING-SUMMARY.md, agent-ctx/)
-# are explicitly ignored here so they don't accidentally get pushed to the
-# public repo when the public repo is bootstrapped from the dev repo.
-# =============================================================================
-
-# --- Dependencies ---
+# Dependencies
 node_modules
 /.pnp
 .pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
 
-# --- Next.js build output ---
+# Build output
 .next/
 /out/
 /build
-
-# --- Testing ---
-/coverage
-
-# --- Runtime data (NEVER commit user data) ---
-# SQLite database (single file at db/custom.db).
-db/*.db
-db/*.db-journal
-db/*.db-wal
-db/*.db-shm
-# Runtime photos, branding logo, encrypted backups.
-data/
-# Persisted runtime config (auto-generated NEXTAUTH_SECRET etc.).
-config/.nextauth-secret
-config/
-
-# --- Compiled standalone binaries (produced by scripts/build-binaries.sh) ---
 dist/
 
-# --- Env files (can opt-in for committing .env.example) ---
+# Runtime data (NEVER commit)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/
+config/
+
+# Env files (keep .env.example)
 .env
 .env.local
 .env.*.local
-# Keep .env.example tracked (it's the template).
 !.env.example
 
-# --- Logs ---
+# Logs
 *.log
-dev.log
-dev.out.log
-server.log
-# Realtime mini-service log.
-mini-services/realtime/realtime.log
 
-# --- Misc ---
+# OS / editor
 .DS_Store
 *.pem
-.vercel
-.claude
-.z-ai-config
-local-*
-prompt
-test
+*.swp
+.vscode
+.idea
 
-# --- TypeScript ---
+# TypeScript
 *.tsbuildinfo
 next-env.d.ts
 
-# --- Skills directory (dev-only) ---
-/skills/
-
-# --- Tool result scratch dir (dev-only) ---
-/tool-results/
-
-# =============================================================================
-# Dev-only context files — these stay in the PRIVATE dev repo, NOT the public
-# repo. They are ignored here so a `git add .` from the public-repo worktree
-# won't pick them up.
-# =============================================================================
-/worklog.md
-/PLAN.md
-/MORNING-SUMMARY.md
-/agent-ctx/
-
-# --- Screenshots saved during dev verification ---
-/.stage0-*.png
-/tmp-*.png
-docs/BUILD-RELEASE-FIXES.md
+# Misc
+.vercel
+local-*

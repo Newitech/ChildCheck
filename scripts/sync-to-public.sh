@@ -117,11 +117,59 @@ rsync -a --delete \
   --exclude='next-env.d.ts' \
   --exclude='config/' \
   --exclude='docs/BUILD-RELEASE-FIXES.md' \
+  --exclude='docs/superpowers/' \
+  --exclude='docs/LICENSES-COMPARISON.md' \
   "$DEV_REPO/" "$PUBLIC_REPO/"
 
 # --- Step 3: Set VERSION ---
 echo ">>> Setting VERSION to $VERSION..."
 echo "$VERSION" > "$PUBLIC_REPO/VERSION"
+
+# --- Step 3b: Write a clean public .gitignore (no dev-only filenames) ---
+cat > "$PUBLIC_REPO/.gitignore" <<'GITIGNORE'
+# Dependencies
+node_modules
+/.pnp
+.pnp.*
+
+# Build output
+.next/
+/out/
+/build
+dist/
+
+# Runtime data (NEVER commit)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/
+config/
+
+# Env files (keep .env.example)
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Logs
+*.log
+
+# OS / editor
+.DS_Store
+*.pem
+*.swp
+.vscode
+.idea
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Misc
+.vercel
+local-*
+GITIGNORE
 
 # --- Step 4: Verify no dev-only files leaked ---
 echo ">>> Verifying no dev-only files leaked..."
