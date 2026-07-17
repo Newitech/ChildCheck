@@ -134,84 +134,95 @@ function spawnInherit(args: string[], opts: { cwd?: string } = {}): ChildProcess
   });
 }
 
-function runDbPush(): Promise<number> {
-  return new Promise((resolve) => {
-    // The prisma CLI's main entry. Installed as a sibling npm package.
-    const prismaCli = app(path.join("node_modules", "prisma", "build", "index.js"));
-    if (!existsSync(prismaCli)) {
-      log(`WARNING: prisma CLI not found at ${prismaCli} — skipping db:push`);
-      resolve(0);
-      return;
-    }
-    log("running prisma db:push...");
-    const child = spawnInherit([prismaCli, "db", "push", "--schema", app("prisma/schema.prisma")], {
+async function runDbPush(): Promise<number> {
+  const prismaCli = app(path.join("node_modules", "prisma", "build", "index.js"));
+  if (!existsSync(prismaCli)) {
+    log(`WARNING: prisma CLI not found at ${prismaCli} — skipping db:push`);
+    return 0;
+  }
+  log("running prisma db:push...");
+  // Use the compiled binary's built-in Bun runtime to run the prisma CLI.
+  // The binary supports running JS files via the --bun flag.
+  try {
+    const child = spawn(process.execPath, ["--bun", prismaCli, "db", "push", "--schema", app("prisma/schema.prisma")], {
+      stdio: ["inherit", "inherit", "inherit"],
+      env: process.env,
       cwd: APP_DIR,
     });
-    child.on("exit", (code) => {
-      log(`db:push exited with code ${code ?? 0}`);
-      resolve(code ?? 0);
+    return new Promise((resolve) => {
+      child.on("exit", (code) => {
+        log(`db:push exited with code ${code ?? 0}`);
+        resolve(code ?? 0);
+      });
+      child.on("error", (err) => {
+        log(`db:push failed to start: ${err.message}`);
+        resolve(1);
+      });
     });
-    child.on("error", (err) => {
-      log(`db:push failed to start: ${err.message}`);
-      resolve(1);
-    });
-  });
+  } catch (err) {
+    log(`db:push error: ${err}`);
+    return 1;
+  }
 }
 
-function startRealtime(): ChildProcess {
+async function startRealtime(): Promise<void> {
   const entry = app(path.join("mini-services", "realtime", "index.ts"));
+  if (!existsSync(entry)) {
+    log(`WARNING: realtime service not found at ${entry} — skipping`);
+    return;
+  }
   log(`starting realtime mini-service on port ${REALTIME_PORT}...`);
-  const child = spawnInherit([entry]);
-  child.on("exit", (code) => {
-    log(`realtime exited with code ${code ?? 0}`);
-  });
-  return child;
+  try {
+    await import(entry);
+    log("realtime service started.");
+  } catch (err) {
+    log(`realtime service failed to start: ${err}`);
+  }
 }
 
-function startNextServer(): ChildProcess {
+async function startNextServer(): Promise<void> {
   const server = app("server.js");
+  if (!existsSync(server)) {
+    log(`ERROR: server.js not found at ${server}`);
+    process.exit(1);
+  }
   // Pass port + hostname via env (Next.js standalone server.js reads these).
   process.env.PORT = PORT;
   process.env.HOSTNAME = HOSTNAME;
   log(`starting Next.js server on ${HOSTNAME}:${PORT}...`);
-  const child = spawnInherit([server]);
-  return child;
+  try {
+    await import(server);
+  } catch (err) {
+    log(`Next.js server failed to start: ${err}`);
+    process.exit(1);
+  }
 }
 
 // --------------------------------------------------------------------------
 // Subcommands
 // --------------------------------------------------------------------------
 
-function cmdRealtimeOnly() {
+async function cmdRealtimeOnly() {
   ensureDirs();
   loadDotenv();
   ensureNextAuthSecret();
   process.env.DATABASE_URL = DATABASE_URL;
   process.env.REALTIME_PORT = REALTIME_PORT;
-  const child = startRealtime();
-  // Propagate signals.
-  const shutdown = (sig: string) => {
-    log(`received ${sig}, shutting down realtime...`);
-    child.kill(sig);
-  };
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
-  process.on("SIGINT", () => shutdown("SIGINT"));
-  child.on("exit", (code) => process.exit(code ?? 0));
+  await startRealtime();
+  // Keep process alive — the realtime service listens on the event loop.
+  process.on("SIGTERM", () => { log("received SIGTERM, exiting"); process.exit(0); });
+  process.on("SIGINT", () => { log("received SIGINT, exiting"); process.exit(0); });
 }
 
-function cmdServerOnly() {
+async function cmdServerOnly() {
   ensureDirs();
   loadDotenv();
   ensureNextAuthSecret();
   process.env.DATABASE_URL = DATABASE_URL;
-  const child = startNextServer();
-  const shutdown = (sig: string) => {
-    log(`received ${sig}, shutting down Next.js server...`);
-    child.kill(sig);
-  };
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
-  process.on("SIGINT", () => shutdown("SIGINT"));
-  child.on("exit", (code) => process.exit(code ?? 0));
+  await startNextServer();
+  // Keep process alive — the Next.js server listens on the event loop.
+  process.on("SIGTERM", () => { log("received SIGTERM, exiting"); process.exit(0); });
+  process.on("SIGINT", () => { log("received SIGINT, exiting"); process.exit(0); });
 }
 
 async function cmdDbPushOnly() {
@@ -240,30 +251,20 @@ async function cmdOrchestrator() {
     log(`WARNING: db:push exited non-zero (${dbCode}) — continuing anyway`);
   }
 
-  // 2. realtime (background)
-  const realtime = startRealtime();
+  // 2. realtime (in-process — runs on the same event loop)
+  await startRealtime();
 
-  // 3. next server (foreground)
-  const server = startNextServer();
+  // 3. next server (in-process — runs on the same event loop)
+  await startNextServer();
 
-  // Propagate signals to BOTH children.
+  // Both servers are now listening on the same event loop.
+  // Signal handling: just exit cleanly.
   const shutdown = (sig: string) => {
     log(`received ${sig}, shutting down...`);
-    try { realtime.kill(sig); } catch { /* ignore */ }
-    try { server.kill(sig); } catch { /* ignore */ }
+    process.exit(0);
   };
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
-
-  // If either dies, take the other down too.
-  realtime.on("exit", (code) => {
-    log(`realtime exited (code ${code ?? 0})`);
-  });
-  server.on("exit", (code) => {
-    log(`Next.js server exited (code ${code ?? 0})`);
-    try { realtime.kill("SIGTERM"); } catch { /* ignore */ }
-    process.exit(code ?? 0);
-  });
 }
 
 // --------------------------------------------------------------------------
