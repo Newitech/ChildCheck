@@ -116,6 +116,7 @@ rsync -a --delete \
   --exclude='tsconfig.tsbuildinfo' \
   --exclude='next-env.d.ts' \
   --exclude='config/' \
+  --exclude='docs/BUILD-RELEASE-FIXES.md' \
   "$DEV_REPO/" "$PUBLIC_REPO/"
 
 # --- Step 3: Set VERSION ---

@@ -92,3 +92,4 @@ next-env.d.ts
 # --- Screenshots saved during dev verification ---
 /.stage0-*.png
 /tmp-*.png
+docs/BUILD-RELEASE-FIXES.md

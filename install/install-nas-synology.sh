@@ -153,20 +153,20 @@ prompt_port() {
     while port_in_use "${suggest}"; do
       suggest=$(( suggest + 1 ))
     done
-    read -r -p "Use an alternative port for ${label}? [${suggest}]: " alt </dev/tty
+    read -r -p "Use an alternative port for ${label}? [${suggest}]: " alt </dev/tty || true
     port="${alt:-${suggest}}"
     while ! [[ "${port}" =~ ^[0-9]+$ ]] || [ "${port}" -lt 1 ] || [ "${port}" -gt 65535 ]; do
       err "'${port}' is not a valid port (must be 1-65535)."
-      read -r -p "${label} port [${suggest}]: " alt </dev/tty
+      read -r -p "${label} port [${suggest}]: " alt </dev/tty || true
       port="${alt:-${suggest}}"
     done
     while port_in_use "${port}"; do
       err "port ${port} is also in use."
-      read -r -p "${label} port [${suggest}]: " alt </dev/tty
+      read -r -p "${label} port [${suggest}]: " alt </dev/tty || true
       port="${alt:-${suggest}}"
       while ! [[ "${port}" =~ ^[0-9]+$ ]] || [ "${port}" -lt 1 ] || [ "${port}" -gt 65535 ]; do
         err "'${port}' is not a valid port (must be 1-65535)."
-        read -r -p "${label} port [${suggest}]: " alt </dev/tty
+        read -r -p "${label} port [${suggest}]: " alt </dev/tty || true
         port="${alt:-${suggest}}"
       done
     done
@@ -241,7 +241,7 @@ step "Installing to ${INSTALL_DIR}"
 mkdir -p "$(dirname "${INSTALL_DIR}")"
 if [ -d "${INSTALL_DIR}" ] && [ -f "${INSTALL_DIR}/${BINARY_NAME}" ]; then
   warn "an existing install is present at ${INSTALL_DIR}."
-  read -r -p "Overwrite? [y/N] " OVERWRITE </dev/tty
+  read -r -p "Overwrite? [y/N] " OVERWRITE </dev/tty || true
   if [[ ! "${OVERWRITE}" =~ ^[Yy]$ ]]; then
     info "keeping existing install. Aborting."
     exit 0
@@ -304,10 +304,10 @@ else
     DEFAULT_URL="http://${IP}:${PORT}"
   fi
 
-  read -r -p "Public URL [${DEFAULT_URL}]: " NEXTAUTH_URL </dev/tty
+  read -r -p "Public URL [${DEFAULT_URL}]: " NEXTAUTH_URL </dev/tty || true
   NEXTAUTH_URL="${NEXTAUTH_URL:-${DEFAULT_URL}}"
 
-  read -r -p "NEXTAUTH_SECRET (blank = auto-generate): " NEXTAUTH_SECRET </dev/tty
+  read -r -p "NEXTAUTH_SECRET (blank = auto-generate): " NEXTAUTH_SECRET </dev/tty || true
   if [ -z "${NEXTAUTH_SECRET}" ]; then
     if command -v openssl >/dev/null 2>&1; then
       NEXTAUTH_SECRET="$(openssl rand -hex 32)"
@@ -317,7 +317,7 @@ else
     info "generated NEXTAUTH_SECRET."
   fi
 
-  read -r -p "CHILDCHECK_DATA_KEY for photo/backup encryption (blank = auto-generate): " CHILDCHECK_DATA_KEY </dev/tty
+  read -r -p "CHILDCHECK_DATA_KEY for photo/backup encryption (blank = auto-generate): " CHILDCHECK_DATA_KEY </dev/tty || true
   if [ -z "${CHILDCHECK_DATA_KEY}" ]; then
     if command -v openssl >/dev/null 2>&1; then
       CHILDCHECK_DATA_KEY="$(openssl rand -hex 32)"
@@ -403,7 +403,7 @@ if [ "${TASK_REGISTERED}" -ne 1 ]; then
   echo "       Run command: ${START_SCRIPT}"
   echo "  5. Click OK."
   echo ""
-  read -r -p "Press ENTER once you've created the task... " </dev/tty
+  read -r -p "Press ENTER once you've created the task... " </dev/tty || true
 fi
 
 # ----------------------------------------------------------------------------
@@ -453,7 +453,7 @@ if [ "${TLS_ENABLED}" -eq 1 ]; then
   echo "      80 + 443 must be open."
   echo "    - Blank: use the DSM reverse proxy with a self-signed cert (or use"
   echo "      Caddy's internal CA via the Docker-on-NAS path below)."
-  read -r -p "  Domain [blank for LAN-only]: " TLS_DOMAIN </dev/tty
+  read -r -p "  Domain [blank for LAN-only]: " TLS_DOMAIN </dev/tty || true
   TLS_DOMAIN="${TLS_DOMAIN:-}"
 
   # Locate the Caddyfile templates shipped alongside this script. Even on

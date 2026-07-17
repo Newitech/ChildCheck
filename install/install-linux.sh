@@ -150,22 +150,22 @@ prompt_port() {
     while port_in_use "${suggest}"; do
       suggest=$(( suggest + 1 ))
     done
-    read -r -p "Use an alternative port for ${label}? [${suggest}]: " alt </dev/tty
+    read -r -p "Use an alternative port for ${label}? [${suggest}]: " alt </dev/tty || true
     port="${alt:-${suggest}}"
     # Validate: numeric + in range.
     while ! [[ "${port}" =~ ^[0-9]+$ ]] || [ "${port}" -lt 1 ] || [ "${port}" -gt 65535 ]; do
       err "'${port}' is not a valid port (must be 1-65535)."
-      read -r -p "${label} port [${suggest}]: " alt </dev/tty
+      read -r -p "${label} port [${suggest}]: " alt </dev/tty || true
       port="${alt:-${suggest}}"
     done
     # Validate: free.
     while port_in_use "${port}"; do
       err "port ${port} is also in use."
-      read -r -p "${label} port [${suggest}]: " alt </dev/tty
+      read -r -p "${label} port [${suggest}]: " alt </dev/tty || true
       port="${alt:-${suggest}}"
       while ! [[ "${port}" =~ ^[0-9]+$ ]] || [ "${port}" -lt 1 ] || [ "${port}" -gt 65535 ]; do
         err "'${port}' is not a valid port (must be 1-65535)."
-        read -r -p "${label} port [${suggest}]: " alt </dev/tty
+        read -r -p "${label} port [${suggest}]: " alt </dev/tty || true
         port="${alt:-${suggest}}"
       done
     done
@@ -329,11 +329,11 @@ else
     fi
   fi
 
-  read -r -p "Public URL [${DEFAULT_URL}]: " NEXTAUTH_URL </dev/tty
+  read -r -p "Public URL [${DEFAULT_URL}]: " NEXTAUTH_URL </dev/tty || true
   NEXTAUTH_URL="${NEXTAUTH_URL:-${DEFAULT_URL}}"
 
   # NEXTAUTH_SECRET: prompt or generate.
-  read -r -p "NEXTAUTH_SECRET (blank = auto-generate): " NEXTAUTH_SECRET </dev/tty
+  read -r -p "NEXTAUTH_SECRET (blank = auto-generate): " NEXTAUTH_SECRET </dev/tty || true
   if [ -z "${NEXTAUTH_SECRET}" ]; then
     if command -v openssl >/dev/null 2>&1; then
       NEXTAUTH_SECRET="$(openssl rand -hex 32)"
@@ -344,7 +344,7 @@ else
   fi
 
   # CHILDCHECK_DATA_KEY: prompt or generate.
-  read -r -p "CHILDCHECK_DATA_KEY for photo/backup encryption (blank = auto-generate): " CHILDCHECK_DATA_KEY </dev/tty
+  read -r -p "CHILDCHECK_DATA_KEY for photo/backup encryption (blank = auto-generate): " CHILDCHECK_DATA_KEY </dev/tty || true
   if [ -z "${CHILDCHECK_DATA_KEY}" ]; then
     if command -v openssl >/dev/null 2>&1; then
       CHILDCHECK_DATA_KEY="$(openssl rand -hex 32)"
