@@ -230,17 +230,13 @@ try {
 
         $nextauthSecret = Read-Host "NEXTAUTH_SECRET (blank = auto-generate)"
         if (-not $nextauthSecret) {
-            $bytes = New-Object byte[] 32
-            (New-Object Security.Cryptography.RandomNumberGenerator).GetBytes($bytes)
-            $nextauthSecret = -join ($bytes | ForEach-Object { $_.ToString("x2") })
+            $nextauthSecret = -join (1..32 | ForEach-Object { '{0:x2}' -f (Get-Random -Maximum 256) })
             Write-Info "generated NEXTAUTH_SECRET."
         }
 
         $dataKey = Read-Host "CHILDCHECK_DATA_KEY for photo/backup encryption (blank = auto-generate)"
         if (-not $dataKey) {
-            $bytes = New-Object byte[] 32
-            (New-Object Security.Cryptography.RandomNumberGenerator).GetBytes($bytes)
-            $dataKey = -join ($bytes | ForEach-Object { $_.ToString("x2") })
+            $dataKey = -join (1..32 | ForEach-Object { '{0:x2}' -f (Get-Random -Maximum 256) })
             Write-Info "generated CHILDCHECK_DATA_KEY — SAVE THIS."
         }
 
