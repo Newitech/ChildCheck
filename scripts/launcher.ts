@@ -9,34 +9,19 @@
  *   2. Mint a default NEXTAUTH_SECRET if none is provided (persisted to
  *      ./config/.nextauth-secret so it stays stable across restarts).
  *   3. Run `prisma db push` to create / migrate the SQLite schema.
- *      Done by spawning the prisma CLI JS file via this same binary
- *      (Bun-compiled binaries can execute other JS files: `childcheck <file>`).
  *   4. Start the realtime mini-service (Socket.io on port 3003) in the background.
  *   5. Start the Next.js standalone server in the foreground.
  *
- * The launcher also responds to subcommands so the same binary can run the
- * individual pieces:
- *   childcheck                  → full orchestrator (default)
- *   childcheck realtime         → run only the realtime mini-service
- *   childcheck server           → run only the Next.js server
- *   childcheck db-push          → run prisma db push and exit
- *   childcheck version          → print version + exit
+ * Subcommands:
+ *   childcheck              Start all services (db:push + realtime + next).
+ *   childcheck realtime     Start only the realtime mini-service.
+ *   childcheck server       Start only the Next.js server.
+ *   childcheck db-push      Run prisma db:push and exit.
+ *   childcheck version      Print version + exit.
  *
- * File layout (after `scripts/build-binaries.sh` runs):
- *   childcheck-<platform>-<arch>/
- *     childcheck              ← the compiled binary (this file)
- *     server.js               ← Next.js standalone server
- *     .next/static/           ← static chunks
- *     public/                 ← static assets (manifest, icons, sw.js)
- *     prisma/
- *       schema.prisma
- *     node_modules/           ← prisma CLI + realtime deps (socket.io)
- *     mini-services/realtime/
- *       index.ts
- *     .env                    ← optional env file (created by install scripts)
- *     data/                   ← runtime: photos, branding, backups
- *     db/                     ← runtime: SQLite database
- *     config/                 ← runtime: persisted secrets
+ * The launcher also detects file-path arguments (e.g. `childcheck /path/to/file.js`)
+ * and runs them in-process — this is how the orchestrator spawns the Next.js
+ * server and realtime service as child processes.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -46,85 +31,77 @@ import path from "node:path";
 
 const VERSION = "1.0.0";
 
-// The directory the binary lives in. For a Bun-compiled binary,
 // `process.execPath` is the binary itself, so its dirname is the install dir.
 const APP_DIR = path.dirname(process.execPath);
 
-// Resolve a path relative to the app dir.
-const app = (p: string) => path.join(APP_DIR, p);
-
-const DATA_DIR = process.env.CHILDCHECK_DATA_DIR || app("data");
-const DB_DIR = process.env.CHILDCHECK_DB_DIR || app("db");
-const CONFIG_DIR = process.env.CHILDCHECK_CONFIG_DIR || app("config");
-const DATABASE_URL =
-  process.env.DATABASE_URL || `file:${path.join(DB_DIR, "custom.db")}`;
-
-const REALTIME_PORT = process.env.REALTIME_PORT || "3003";
-const PORT = process.env.PORT || "3000";
-const HOSTNAME = process.env.HOSTNAME || "0.0.0.0";
-
-// --------------------------------------------------------------------------
-// Helpers
-// --------------------------------------------------------------------------
+// Resolve a path relative to the app directory.
+function app(p: string): string {
+  return path.resolve(APP_DIR, p);
+}
 
 function log(msg: string) {
   console.log(`[childcheck] ${msg}`);
 }
 
+// --------------------------------------------------------------------------
+// Config
+// --------------------------------------------------------------------------
+
+const PORT = process.env.PORT || "3000";
+const REALTIME_PORT = process.env.REALTIME_PORT || "3003";
+const HOSTNAME = process.env.HOSTNAME || "0.0.0.0";
+const DATABASE_URL = process.env.DATABASE_URL || `file:${app("db/custom.db")}`;
+
+// --------------------------------------------------------------------------
+// Setup
+// --------------------------------------------------------------------------
+
 function ensureDirs() {
-  for (const dir of [
-    DATA_DIR,
-    path.join(DATA_DIR, "photos"),
-    path.join(DATA_DIR, "branding"),
-    path.join(DATA_DIR, "backups"),
-    DB_DIR,
-    CONFIG_DIR,
-  ]) {
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-      log(`created dir: ${dir}`);
+  const dirs = [app("data"), app("db"), app("config")];
+  for (const d of dirs) {
+    if (!existsSync(d)) {
+      mkdirSync(d, { recursive: true });
+      chmodSync(d, 0o750);
     }
   }
 }
 
 function loadDotenv() {
-  // Lightweight .env loader (no dep on dotenv). Reads KEY=VALUE lines.
-  const envPath = app(".env");
-  if (!existsSync(envPath)) return;
-  const raw = readFileSync(envPath, "utf8");
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eq = trimmed.indexOf("=");
-    if (eq < 0) continue;
-    const key = trimmed.slice(0, eq).trim();
-    let val = trimmed.slice(eq + 1).trim();
-    // Strip surrounding quotes.
-    if (
-      (val.startsWith('"') && val.endsWith('"')) ||
-      (val.startsWith("'") && val.endsWith("'"))
-    ) {
-      val = val.slice(1, -1);
+  const envFile = app(path.join("config", ".env"));
+  if (existsSync(envFile)) {
+    const content = readFileSync(envFile, "utf8");
+    for (const line of content.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq < 0) continue;
+      const key = trimmed.slice(0, eq).trim();
+      const val = trimmed.slice(eq + 1).trim();
+      if (!process.env[key]) {
+        process.env[key] = val;
+      }
     }
-    if (!process.env[key]) process.env[key] = val;
   }
 }
 
 function ensureNextAuthSecret() {
   if (process.env.NEXTAUTH_SECRET) return;
-  const secretFile = path.join(CONFIG_DIR, ".nextauth-secret");
+  const secretFile = app(path.join("config", ".nextauth-secret"));
+  let secret: string;
   if (existsSync(secretFile)) {
-    process.env.NEXTAUTH_SECRET = readFileSync(secretFile, "utf8").trim();
-    log(`NEXTAUTH_SECRET loaded from ${secretFile}`);
-    return;
+    secret = readFileSync(secretFile, "utf8").trim();
+  } else {
+    secret = randomBytes(32).toString("hex");
+    writeFileSync(secretFile, secret, { mode: 0o600 });
+    chmodSync(secretFile, 0o600);
   }
-  // Generate 32 random bytes as hex.
-  const secret = randomBytes(32).toString("hex");
-  writeFileSync(secretFile, secret, { mode: 0o600 });
-  chmodSync(secretFile, 0o600);
   process.env.NEXTAUTH_SECRET = secret;
-  log(`NEXTAUTH_SECRET generated and saved to ${secretFile}`);
+  log(`NEXTAUTH_SECRET ${existsSync(secretFile) ? "loaded" : "generated"} from ${secretFile}`);
 }
+
+// --------------------------------------------------------------------------
+// Process spawning
+// --------------------------------------------------------------------------
 
 function spawnInherit(args: string[], opts: { cwd?: string } = {}): ChildProcess {
   return spawn(process.execPath, args, {
@@ -134,95 +111,81 @@ function spawnInherit(args: string[], opts: { cwd?: string } = {}): ChildProcess
   });
 }
 
-async function runDbPush(): Promise<number> {
-  const prismaCli = app(path.join("node_modules", "prisma", "build", "index.js"));
-  if (!existsSync(prismaCli)) {
-    log(`WARNING: prisma CLI not found at ${prismaCli} — skipping db:push`);
-    return 0;
-  }
-  log("running prisma db:push...");
-  // Use the compiled binary's built-in Bun runtime to run the prisma CLI.
-  // The binary supports running JS files via the --bun flag.
-  try {
-    const child = spawn(process.execPath, ["--bun", prismaCli, "db", "push", "--schema", app("prisma/schema.prisma")], {
-      stdio: ["inherit", "inherit", "inherit"],
-      env: process.env,
+function runDbPush(): Promise<number> {
+  return new Promise((resolve) => {
+    const prismaCli = app(path.join("node_modules", "prisma", "build", "index.js"));
+    if (!existsSync(prismaCli)) {
+      log(`WARNING: prisma CLI not found at ${prismaCli} — skipping db:push`);
+      resolve(0);
+      return;
+    }
+    log("running prisma db:push...");
+    const child = spawnInherit([prismaCli, "db", "push", "--schema", app("prisma/schema.prisma")], {
       cwd: APP_DIR,
     });
-    return new Promise((resolve) => {
-      child.on("exit", (code) => {
-        log(`db:push exited with code ${code ?? 0}`);
-        resolve(code ?? 0);
-      });
-      child.on("error", (err) => {
-        log(`db:push failed to start: ${err.message}`);
-        resolve(1);
-      });
+    child.on("exit", (code) => {
+      log(`db:push exited with code ${code ?? 0}`);
+      resolve(code ?? 0);
     });
-  } catch (err) {
-    log(`db:push error: ${err}`);
-    return 1;
-  }
+    child.on("error", (err) => {
+      log(`db:push failed to start: ${err.message}`);
+      resolve(1);
+    });
+  });
 }
 
-async function startRealtime(): Promise<void> {
+function startRealtime(): ChildProcess {
   const entry = app(path.join("mini-services", "realtime", "index.ts"));
-  if (!existsSync(entry)) {
-    log(`WARNING: realtime service not found at ${entry} — skipping`);
-    return;
-  }
   log(`starting realtime mini-service on port ${REALTIME_PORT}...`);
-  try {
-    await import(entry);
-    log("realtime service started.");
-  } catch (err) {
-    log(`realtime service failed to start: ${err}`);
-  }
+  const child = spawnInherit([entry]);
+  child.on("exit", (code) => {
+    log(`realtime exited with code ${code ?? 0}`);
+  });
+  return child;
 }
 
-async function startNextServer(): Promise<void> {
+function startNextServer(): ChildProcess {
   const server = app("server.js");
-  if (!existsSync(server)) {
-    log(`ERROR: server.js not found at ${server}`);
-    process.exit(1);
-  }
-  // Pass port + hostname via env (Next.js standalone server.js reads these).
   process.env.PORT = PORT;
   process.env.HOSTNAME = HOSTNAME;
   log(`starting Next.js server on ${HOSTNAME}:${PORT}...`);
-  try {
-    await import(server);
-  } catch (err) {
-    log(`Next.js server failed to start: ${err}`);
-    process.exit(1);
-  }
+  const child = spawnInherit([server]);
+  return child;
 }
 
 // --------------------------------------------------------------------------
 // Subcommands
 // --------------------------------------------------------------------------
 
-async function cmdRealtimeOnly() {
+function cmdRealtimeOnly() {
   ensureDirs();
   loadDotenv();
   ensureNextAuthSecret();
   process.env.DATABASE_URL = DATABASE_URL;
   process.env.REALTIME_PORT = REALTIME_PORT;
-  await startRealtime();
-  // Keep process alive — the realtime service listens on the event loop.
-  process.on("SIGTERM", () => { log("received SIGTERM, exiting"); process.exit(0); });
-  process.on("SIGINT", () => { log("received SIGINT, exiting"); process.exit(0); });
+  const child = startRealtime();
+  const shutdown = (sig: string) => {
+    log(`received ${sig}, shutting down realtime...`);
+    child.kill(sig as NodeJS.Signals);
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  child.on("exit", (code) => process.exit(code ?? 0));
 }
 
-async function cmdServerOnly() {
+function cmdServerOnly() {
   ensureDirs();
   loadDotenv();
   ensureNextAuthSecret();
   process.env.DATABASE_URL = DATABASE_URL;
-  await startNextServer();
-  // Keep process alive — the Next.js server listens on the event loop.
-  process.on("SIGTERM", () => { log("received SIGTERM, exiting"); process.exit(0); });
-  process.on("SIGINT", () => { log("received SIGINT, exiting"); process.exit(0); });
+  const child = startNextServer();
+  const shutdown = (sig: string) => {
+    log(`received ${sig}, shutting down Next.js server...`);
+    child.kill(sig as NodeJS.Signals);
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  child.on("exit", (code) => process.exit(code ?? 0));
 }
 
 async function cmdDbPushOnly() {
@@ -251,28 +214,63 @@ async function cmdOrchestrator() {
     log(`WARNING: db:push exited non-zero (${dbCode}) — continuing anyway`);
   }
 
-  // 2. realtime (in-process — runs on the same event loop)
-  await startRealtime();
+  // 2. realtime (background child process)
+  const realtime = startRealtime();
 
-  // 3. next server (in-process — runs on the same event loop)
-  await startNextServer();
+  // 3. next server (foreground child process)
+  const server = startNextServer();
 
-  // Both servers are now listening on the same event loop.
-  // Signal handling: just exit cleanly.
+  // Propagate signals to BOTH children.
   const shutdown = (sig: string) => {
     log(`received ${sig}, shutting down...`);
-    process.exit(0);
+    try { realtime.kill(sig as NodeJS.Signals); } catch { /* ignore */ }
+    try { server.kill(sig as NodeJS.Signals); } catch { /* ignore */ }
   };
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
+
+  // If either dies, take the other down too.
+  realtime.on("exit", (code) => {
+    log(`realtime exited (code ${code ?? 0})`);
+  });
+  server.on("exit", (code) => {
+    log(`Next.js server exited (code ${code ?? 0})`);
+    try { realtime.kill("SIGTERM"); } catch { /* ignore */ }
+    process.exit(code ?? 0);
+  });
 }
 
 // --------------------------------------------------------------------------
 // Main
 // --------------------------------------------------------------------------
 
-(function main() {
+const KNOWN_COMMANDS = new Set([
+  "start", "all", "realtime", "server", "next",
+  "db-push", "dbpush", "version", "help",
+  "--version", "-v", "--help", "-h",
+  undefined,
+]);
+
+(async function main() {
   const cmd = process.argv[2];
+
+  // If the argument is NOT a known subcommand but IS a file that exists,
+  // run it in-process. This is how the orchestrator spawns server.js,
+  // realtime/index.ts, and the prisma CLI — the compiled binary detects
+  // the file path and executes it with Bun's runtime, which resolves
+  // node_modules from the file's directory (correct module resolution).
+  if (cmd && !KNOWN_COMMANDS.has(cmd) && existsSync(cmd)) {
+    try {
+      // Change to the file's directory so module resolution finds node_modules.
+      process.chdir(path.dirname(path.resolve(cmd)));
+      await import(path.resolve(cmd));
+    } catch (err) {
+      console.error(`Error running ${cmd}: ${err}`);
+      process.exit(1);
+    }
+    return;
+  }
+
   switch (cmd) {
     case undefined:
     case "start":
@@ -315,26 +313,15 @@ Environment variables (override in .env or shell):
   DATABASE_URL            SQLite path (default file:./db/custom.db)
   NEXTAUTH_URL            Public URL (e.g. https://checkin.mychurch.org)
   NEXTAUTH_SECRET         Session JWT signing secret (auto-generated if unset)
-  CHILDCHECK_DATA_DIR     Photos/backups/branding dir (default ./data)
-  CHILDCHECK_DATA_KEY     32-byte hex AES key for photo/backup encryption
-  REALTIME_INTERNAL_KEY   Shared secret for the /broadcast endpoint
-
-Files alongside this binary:
-  server.js               Next.js standalone server
-  .next/static/           Next.js static chunks
-  public/                 Manifest, icons, service worker
-  prisma/schema.prisma    Database schema
-  node_modules/           Prisma CLI + socket.io
-  mini-services/realtime/ Socket.io mini-service source
-  .env                    Optional env file
-  data/                   Runtime photos / branding / backups
-  db/                     SQLite database
-  config/                 Persisted runtime secrets
+  CHILDCHECK_DATA_KEY     AES-256 key for photo/backup encryption
+  CHILDCHECK_DATA_DIR     Directory for photos + backups (default ./data)
+  CHILDCHECK_CONFIG_DIR   Directory for persisted config (default ./config)
 `);
       process.exit(0);
+      break;
     default:
       console.error(`Unknown command: ${cmd}`);
-      console.error("Run `childcheck help` for usage.");
-      process.exit(2);
+      console.error(`Run \`childcheck help\` for usage.`);
+      process.exit(1);
   }
 })();
