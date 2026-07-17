@@ -105,7 +105,9 @@ function Read-Port([int]$Default, [string]$Label) {
 }
 
 # --- 0. Locate the binary ----------------------------------------------------
-$workDir = Join-Path $env:TEMP "childcheck-install-$(Get-Random)"
+# Use the system temp dir (C:\Windows\Temp) instead of the user's AppData\Local\Temp
+# to avoid permission issues when running as Administrator via a different user session.
+$workDir = Join-Path "$env:SystemRoot\Temp" "childcheck-install-$(Get-Random)"
 New-Item -ItemType Directory -Path $workDir -Force | Out-Null
 
 try {
