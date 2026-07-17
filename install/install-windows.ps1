@@ -105,10 +105,9 @@ function Read-Port([int]$Default, [string]$Label) {
 }
 
 # --- 0. Locate the binary ----------------------------------------------------
-# Use the install dir's parent for temp extraction (always writable by admin,
-# and cleaned up in the finally block at the end of the script).
-$installParent = Split-Path $InstallDir -Parent
-$workDir = Join-Path $installParent ".childcheck-tmp-$(Get-Random)"
+# Use C:\ProgramData for temp extraction — always writable by Administrator
+# on all Windows versions, unlike user temp dirs or Program Files.
+$workDir = Join-Path $env:ProgramData "childcheck-install-$(Get-Random)"
 New-Item -ItemType Directory -Path $workDir -Force | Out-Null
 
 try {
