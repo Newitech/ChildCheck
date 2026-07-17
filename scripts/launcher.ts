@@ -251,19 +251,16 @@ const KNOWN_COMMANDS = new Set([
   undefined,
 ]);
 
-(async function main() {
+(function main() {
   const cmd = process.argv[2];
 
   // If the argument is NOT a known subcommand but IS a file that exists,
-  // run it in-process. This is how the orchestrator spawns server.js,
-  // realtime/index.ts, and the prisma CLI — the compiled binary detects
-  // the file path and executes it with Bun's runtime, which resolves
-  // node_modules from the file's directory (correct module resolution).
+  // run it using require() with the correct working directory. Bun's require()
+  // resolves node_modules from process.cwd(), so we chdir to the app dir first.
   if (cmd && !KNOWN_COMMANDS.has(cmd) && existsSync(cmd)) {
     try {
-      // Change to the file's directory so module resolution finds node_modules.
-      process.chdir(path.dirname(path.resolve(cmd)));
-      await import(path.resolve(cmd));
+      process.chdir(APP_DIR);
+      require(path.resolve(cmd));
     } catch (err) {
       console.error(`Error running ${cmd}: ${err}`);
       process.exit(1);
