@@ -165,7 +165,17 @@ try {
     }
 
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-    Copy-Item -Path (Join-Path $srcDir "*") -Destination $InstallDir -Recurse -Force
+
+    # Copy each top-level item individually, skipping problematic paths
+    # (e.g. .next/node_modules can have symlink-like files that Windows denies).
+    Get-ChildItem -Path $srcDir -Force | ForEach-Object {
+        $dest = Join-Path $InstallDir $_.Name
+        try {
+            Copy-Item -Path $_.FullName -Destination $dest -Recurse -Force -ErrorAction Stop
+        } catch {
+            Write-Warn "skipping $($_.Name): $($_.Exception.Message)"
+        }
+    }
     # Remove the source's empty data/db/config dirs so we can symlink ours.
     Remove-Item -Path (Join-Path $InstallDir "data") -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -Path (Join-Path $InstallDir "db") -Recurse -Force -ErrorAction SilentlyContinue
