@@ -45,11 +45,12 @@ fi
 
 IFS=',' read -ra TARGETS <<< "${TARGETS_CSV}"
 
-# Mapping: <target> -> <bun download URL> <binary name> <platform label>
+# Mapping: <target> -> extracted dir name inside the bun release zip.
+# NOTE: Bun names ARM64 assets "aarch64", NOT "arm64".
 declare -A BUN_DOWNLOAD=(
   ["linux-x64"]="bun-linux-x64"
-  ["linux-arm64"]="bun-linux-arm64"
-  ["macos-arm64"]="bun-darwin-arm64"
+  ["linux-arm64"]="bun-linux-aarch64"
+  ["macos-arm64"]="bun-darwin-aarch64"
   ["windows-x64"]="bun-windows-x64"
 )
 declare -A BINARY_NAME=(
@@ -66,8 +67,8 @@ declare -A BUN_BIN_NAME=(
 )
 declare -A BUN_ZIP=(
   ["linux-x64"]="bun-linux-x64.zip"
-  ["linux-arm64"]="bun-linux-arm64.zip"
-  ["macos-arm64"]="bun-darwin-arm64.zip"
+  ["linux-arm64"]="bun-linux-aarch64.zip"
+  ["macos-arm64"]="bun-darwin-aarch64.zip"
   ["windows-x64"]="bun-windows-x64.zip"
 )
 
