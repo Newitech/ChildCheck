@@ -9,8 +9,10 @@
 #   - windows-x64
 #
 # Each tarball contains:
-#   - bun (the Bun runtime binary for that platform)
-#   - childcheck / childcheck.exe (a thin shell script that runs bun server.js)
+#   - bun / bun.exe (the Bun runtime binary for that platform;
+#     x64 uses the "-baseline" build for old-CPU compatibility)
+#   - childcheck / childcheck.bat (thin launcher that runs the service entry)
+#   - service-entry.js (starts server.js + realtime mini-service together)
 #   - server.js (Next.js standalone server)
 #   - node_modules/ (traced dependencies)
 #   - .next/static/ (static chunks)
@@ -47,17 +49,15 @@ IFS=',' read -ra TARGETS <<< "${TARGETS_CSV}"
 
 # Mapping: <target> -> extracted dir name inside the bun release zip.
 # NOTE: Bun names ARM64 assets "aarch64", NOT "arm64".
+# NOTE: x64 targets use the "-baseline" builds. Standard Bun x64 builds
+# require AVX2 CPU instructions and crash with "Illegal instruction" on
+# older CPUs. Baseline builds run on ALL x64 CPUs (old and new) — the
+# performance difference is negligible for this app.
 declare -A BUN_DOWNLOAD=(
-  ["linux-x64"]="bun-linux-x64"
+  ["linux-x64"]="bun-linux-x64-baseline"
   ["linux-arm64"]="bun-linux-aarch64"
   ["macos-arm64"]="bun-darwin-aarch64"
-  ["windows-x64"]="bun-windows-x64"
-)
-declare -A BINARY_NAME=(
-  ["linux-x64"]="childcheck"
-  ["linux-arm64"]="childcheck"
-  ["macos-arm64"]="childcheck"
-  ["windows-x64"]="childcheck.exe"
+  ["windows-x64"]="bun-windows-x64-baseline"
 )
 declare -A BUN_BIN_NAME=(
   ["linux-x64"]="bun"
@@ -66,10 +66,10 @@ declare -A BUN_BIN_NAME=(
   ["windows-x64"]="bun.exe"
 )
 declare -A BUN_ZIP=(
-  ["linux-x64"]="bun-linux-x64.zip"
+  ["linux-x64"]="bun-linux-x64-baseline.zip"
   ["linux-arm64"]="bun-linux-aarch64.zip"
   ["macos-arm64"]="bun-darwin-aarch64.zip"
-  ["windows-x64"]="bun-windows-x64.zip"
+  ["windows-x64"]="bun-windows-x64-baseline.zip"
 )
 
 BUN_VERSION="${BUN_VERSION:-1.3.14}"
@@ -149,8 +149,7 @@ download_bun() {
 # --- 4. Build each target ---------------------------------------------------
 for TARGET in "${TARGETS[@]}"; do
   BUN_FLAG="${BUN_DOWNLOAD[$TARGET]:-}"
-  BIN_NAME="${BINARY_NAME[$TARGET]:-}"
-  if [ -z "${BUN_FLAG}" ] || [ -z "${BIN_NAME}" ]; then
+  if [ -z "${BUN_FLAG}" ]; then
     echo "ERROR: unknown target '${TARGET}'. Supported: ${DEFAULT_TARGETS}"
     exit 1
   fi
@@ -170,11 +169,12 @@ for TARGET in "${TARGETS[@]}"; do
   # Copy the Bun binary into the output dir.
   echo "[build:${TARGET}] copying bun binary..."
   BUN_SRC="${BUN_BIN_DIR}/${BUN_BIN_NAME[$TARGET]}"
-  cp "${BUN_SRC}" "${OUT_DIR}/bun"
-  if [ "${BIN_NAME}" = "childcheck.exe" ]; then
+  if [ "${TARGET}" = "windows-x64" ]; then
     cp "${BUN_SRC}" "${OUT_DIR}/bun.exe"
+  else
+    cp "${BUN_SRC}" "${OUT_DIR}/bun"
+    chmod +x "${OUT_DIR}/bun"
   fi
-  chmod +x "${OUT_DIR}/bun" "${OUT_DIR}/bun.exe" 2>/dev/null || true
 
   # Clean up the download temp dir (the whole tmp dir, not just the subdir).
   rm -rf "$(dirname "${BUN_BIN_DIR}")"
@@ -225,17 +225,88 @@ PJSON
   # Create empty data/db/config dirs (the launcher will populate them).
   mkdir -p "${OUT_DIR}/data" "${OUT_DIR}/db" "${OUT_DIR}/config"
 
+  # Service entry point (JS): applies the DB schema (prisma db push), then
+  # starts the Next.js server + realtime mini-service as child processes and
+  # shuts them down together. Used by EVERY launch path (systemd, the Windows
+  # service via WinSW, childcheck / childcheck.bat) so they all share one
+  # code path. A .bat file cannot be a Windows service executable, so this
+  # JS entry is required for the Windows service.
+  cat > "${OUT_DIR}/service-entry.js" <<'JSEOF'
+// ChildCheck service entry — applies the database schema, then starts the
+// Next.js standalone server and the realtime mini-service as child
+// processes, and stops them together.
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
+const root = process.cwd();
+const bunBin = process.platform === "win32" ? join(root, "bun.exe") : join(root, "bun");
+const prismaCli = join(root, "node_modules", "prisma", "build", "index.js");
+
+// 1. Apply the database schema (creates the SQLite file + tables on first
+//    run, applies schema changes after updates). Non-fatal on failure — the
+//    server may still work if the DB is already set up. DATABASE_URL comes
+//    from the environment (systemd EnvironmentFile / WinSW <env> entries).
+if (existsSync(prismaCli)) {
+  console.log("[childcheck] applying database schema (prisma db push)...");
+  const r = spawnSync(bunBin, [prismaCli, "db", "push", "--skip-generate"], {
+    cwd: root,
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (r.status !== 0) {
+    console.warn(`[childcheck] WARNING: db push exited ${r.status ?? "unknown"} — continuing anyway`);
+  }
+} else {
+  console.warn("[childcheck] WARNING: prisma CLI not found — skipping db push");
+}
+
+// 2. Start the Next.js server + realtime mini-service.
+const children = [];
+let shuttingDown = false;
+
+function shutdown(code) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  for (const c of children) { try { c.kill(); } catch {} }
+  process.exit(code);
+}
+
+function start(args, name) {
+  const child = spawn(bunBin, args, { cwd: root, stdio: "inherit", env: process.env });
+  child.on("error", (err) => {
+    console.error(`[childcheck] failed to start ${name}: ${err.message}`);
+    shutdown(1);
+  });
+  child.on("exit", (code, signal) => {
+    console.error(`[childcheck] ${name} exited (code=${code} signal=${signal})`);
+    // If either child dies, exit non-zero so the service manager restarts us.
+    shutdown(code ?? 1);
+  });
+  children.push(child);
+}
+
+process.on("SIGINT", () => shutdown(0));
+process.on("SIGTERM", () => shutdown(0));
+process.on("exit", () => {
+  for (const c of children) { try { c.kill(); } catch {} }
+});
+
+start(["server.js"], "next");
+start(["mini-services/realtime/index.ts"], "realtime");
+JSEOF
+
   # Create the launcher script (shell for unix, batch for windows).
   echo "[build:${TARGET}] writing launcher script..."
-  if [ "${BIN_NAME}" = "childcheck.exe" ]; then
+  if [ "${TARGET}" = "windows-x64" ]; then
     cat > "${OUT_DIR}/childcheck.bat" <<'BATEOF'
 @echo off
 cd /d "%~dp0"
-set "PORT=%PORT%:3000"
-set "HOSTNAME=%HOSTNAME%:0.0.0.0"
-start "" .\bun.exe server.js
-start "" .\bun.exe mini-services/realtime/index.ts
+if "%PORT%"=="" set "PORT=3000"
+if "%HOSTNAME%"=="" set "HOSTNAME=0.0.0.0"
 echo ChildCheck is starting on http://localhost:%PORT%
+echo Press Ctrl+C to stop.
+.\bun.exe service-entry.js
 BATEOF
   else
     cat > "${OUT_DIR}/childcheck" <<'SHEOF'
@@ -244,19 +315,12 @@ cd "$(dirname "$0")"
 export PORT="${PORT:-3000}"
 export HOSTNAME="${HOSTNAME:-0.0.0.0}"
 
-# Start Next.js server (foreground) + realtime mini-service (background).
-./bun server.js &
-NEXT_PID=$!
-./bun mini-services/realtime/index.ts &
-REALTIME_PID=$!
-
 echo "ChildCheck is starting on http://localhost:${PORT}"
 echo "Press Ctrl+C to stop."
 
-# Forward signals to children.
-trap 'kill ${NEXT_PID} ${REALTIME_PID} 2>/dev/null; exit' SIGINT SIGTERM
-
-wait
+# service-entry.js applies the DB schema, then starts server + realtime and
+# handles SIGINT/SIGTERM itself (kills its children before exiting).
+exec ./bun service-entry.js
 SHEOF
     chmod +x "${OUT_DIR}/childcheck"
   fi
@@ -270,12 +334,8 @@ cd "$(dirname "$0")"
 export PORT="${PORT:-3000}"
 export HOSTNAME="${HOSTNAME:-0.0.0.0}"
 
-# Start realtime (background).
-./bun mini-services/realtime/index.ts &
-REALTIME_PID=$!
-
-# Start Next.js (foreground — this process IS the service).
-exec ./bun server.js
+# service-entry.js applies the DB schema, then starts server + realtime.
+exec ./bun service-entry.js
 SHEOF
   chmod +x "${OUT_DIR}/run-service.sh"
 
@@ -287,10 +347,13 @@ ChildCheck ${TARGET}
 This directory contains a self-contained ChildCheck deployment.
 
 Files:
-  bun / bun.exe              The Bun runtime (v${BUN_VERSION}).
+  bun / bun.exe              The Bun runtime (v${BUN_VERSION}, x64 = baseline
+                             build, runs on older CPUs without AVX2).
   childcheck / childcheck.bat  Launcher script (starts server + realtime).
-  run-service.sh           Run as a systemd service (foreground).
-  server.js                Next.js standalone server.
+  service-entry.js           Starts server.js + realtime together (used by
+                             the Windows service and the launchers).
+  run-service.sh             Run as a systemd service (foreground).
+  server.js                  Next.js standalone server.
   .next/static/            Static JS/CSS chunks.
   public/                  Manifest, icons, service worker.
   prisma/schema.prisma     Database schema.

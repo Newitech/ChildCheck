@@ -41,7 +41,7 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 $installDir   = "C:\Program Files\ChildCheck"
 $dataDir      = "C:\ProgramData\ChildCheck"
 $serviceName  = "ChildCheck"
-$binaryName   = "childcheck.exe"
+$binaryName   = "bun.exe"
 $winswExeName = "childcheck-service.exe"
 
 function Write-Info($msg) { Write-Host "[info]  $msg" -ForegroundColor Green }

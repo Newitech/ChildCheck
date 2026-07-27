@@ -6,7 +6,7 @@
 #   2. Creates C:\ProgramData\ChildCheck\{data,db,config,logs}.
 #   3. Writes a default .env (prompting for NEXTAUTH_SECRET if not set).
 #   4. Downloads WinSW (Windows Service Wrapper) into the install dir.
-#   5. Writes a childcheck.xml config + childcheck.exe wrapper.
+#   5. Writes a WinSW XML config (runs: bun.exe service-entry.js).
 #   6. Registers + starts the Windows service.
 #   7. Prints the URL + first-run setup instructions.
 #
@@ -45,7 +45,7 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 # --- Constants ---------------------------------------------------------------
 $target = "windows-x64"
-$binaryName = "childcheck.exe"
+$binaryName = "bun.exe"
 $dataDir = "C:\ProgramData\ChildCheck"
 $serviceName = "ChildCheck"
 $serviceDisplayName = "ChildCheck — secure child check-in / check-out"
@@ -287,6 +287,7 @@ HOSTNAME=0.0.0.0
   <name>$serviceDisplayName</name>
   <description>$serviceDescription</description>
   <executable>$InstallDir\$binaryName</executable>
+  <arguments>service-entry.js</arguments>
   <workingdirectory>$InstallDir</workingdirectory>
   <logpath>$dataDir\logs</logpath>
   <log mode="roll-by-size">

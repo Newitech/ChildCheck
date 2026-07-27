@@ -30,7 +30,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Server, type Socket } from "socket.io";
 
-const PORT = 3003;
+const PORT = Number(process.env.REALTIME_PORT) || 3003;
 const INTERNAL_KEY = process.env.REALTIME_INTERNAL_KEY ?? "childcheck-internal-dev";
 
 const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {

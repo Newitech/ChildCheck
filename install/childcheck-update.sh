@@ -122,7 +122,6 @@ case "${OS_KERNEL}" in
   *) err "unsupported OS: ${OS_KERNEL} (use Docker instead)"; exit 1 ;;
 esac
 TARGET="${PLATFORM}-${ARCH}"
-[ "${PLATFORM}" = "windows" ] && BINARY_NAME="childcheck.exe"
 
 info "platform=${PLATFORM} arch=${ARCH} target=${TARGET}"
 
@@ -361,7 +360,7 @@ if [ "${SKIP_DB_PUSH}" -eq 1 ]; then
   step "skipping db:push (--skip-db-push)"
 else
   step "running db:push (schema migration)"
-  ( cd "${INSTALL_DIR}" && "./${BINARY_NAME}" db-push ) || {
+  ( cd "${INSTALL_DIR}" && ./bun node_modules/prisma/build/index.js db push --skip-generate ) || {
     err "db:push failed."
     print_rollback "${BACKUP_DIR}"
     exit 1

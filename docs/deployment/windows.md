@@ -1,8 +1,8 @@
 # Windows Native Deployment
 
 Installs ChildCheck as a Windows Service on Windows 10/11 or Windows Server
-2019+, using the prebuilt Bun-compiled binary and [WinSW](https://github.com/winsw/winsw)
-as the service wrapper.
+2019+, using the prebuilt standalone bundle (Bun runtime + Next.js server)
+and [WinSW](https://github.com/winsw/winsw) as the service wrapper.
 
 ## Supported targets
 
@@ -158,9 +158,9 @@ Get-Content "C:\ProgramData\ChildCheck\logs\*.log" -Tail 50
 ```
 
 ### "Windows protected your PC" SmartScreen warning
-On first run, Windows SmartScreen may block the binary. Click **More info** →
+On first run, Windows SmartScreen may block the runtime. Click **More info** →
 **Run anyway**. To suppress this for all future launches, right-click
-`childcheck.exe` → Properties → check **Unblock**.
+`bun.exe` → Properties → check **Unblock**.
 
 ### Port 3000 already in use
 Edit `C:\ProgramData\ChildCheck\config\.env`, change `PORT=3000` to e.g.
