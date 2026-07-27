@@ -15,7 +15,15 @@ and [WinSW](https://github.com/winsw/winsw) as the service wrapper.
 ## Prerequisites
 
 - Windows 10 / 11 / Server 2019 or newer.
-- PowerShell 5.1+ (Windows 10+ ships with it).
+- **PowerShell 7+ recommended** (`pwsh`). The built-in Windows PowerShell 5.1
+  works but is known to cause issues (refuses unsigned scripts under the
+  default policy, older TLS, slower downloads). The installer will warn and
+  offer to abort if it detects 5.1. Install PowerShell 7 with:
+  ```powershell
+  winget install Microsoft.PowerShell
+  ```
+  or from https://github.com/PowerShell/PowerShell/releases — then run the
+  installer from the **PowerShell 7** terminal.
 - Administrator account.
 - ~300 MB free disk.
 
@@ -23,32 +31,35 @@ and [WinSW](https://github.com/winsw/winsw) as the service wrapper.
 
 ### Option A — one-liner (recommended)
 
-Open an **elevated** PowerShell (right-click → Run as Administrator) and run:
+Open an **elevated** PowerShell 7 (right-click → Run as Administrator) and run:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "iex (irm https://raw.githubusercontent.com/Newitech/ChildCheck/main/install/install-windows.ps1)"
+pwsh -ExecutionPolicy Bypass -Command "iex (irm https://raw.githubusercontent.com/Newitech/ChildCheck/main/install/install-windows.ps1)"
 ```
+
+> If PowerShell 7 isn't installed yet, replace `pwsh` with `powershell` — but
+> expect a warning; 5.1 is known to cause issues.
 
 ### Option B — clone + run locally
 
 ```powershell
 git clone https://github.com/Newitech/ChildCheck.git
 cd ChildCheck
-powershell -ExecutionPolicy Bypass -File .\install\install-windows.ps1
+pwsh -ExecutionPolicy Bypass -File .\install\install-windows.ps1
 ```
 
 ### Option C — install a specific tarball
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install\install-windows.ps1 -Source .\childcheck-windows-x64.tar.gz
+pwsh -ExecutionPolicy Bypass -File .\install\install-windows.ps1 -Source .\childcheck-windows-x64.tar.gz
 # or:
-powershell -ExecutionPolicy Bypass -File .\install\install-windows.ps1 -Source .\childcheck-windows-x64\
+pwsh -ExecutionPolicy Bypass -File .\install\install-windows.ps1 -Source .\childcheck-windows-x64\
 ```
 
 ### Option D — install a specific version
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install\install-windows.ps1 -Version 1.2.3
+pwsh -ExecutionPolicy Bypass -File .\install\install-windows.ps1 -Version 1.2.3
 ```
 
 > ⚠️ The `-ExecutionPolicy Bypass` flag is required on stock Windows because the
@@ -156,6 +167,12 @@ WinSW couldn't start the wrapper binary. Check the WinSW log:
 ```powershell
 Get-Content "C:\ProgramData\ChildCheck\logs\*.log" -Tail 50
 ```
+
+### Service crashes with `ENOENT` errors inside `.next\...`
+The install was copied incompletely — almost always antivirus/Defender
+quarantining files mid-copy. The current installer detects this and aborts
+with a list of missing files. Add an exclusion for
+`C:\Program Files\ChildCheck`, then re-run the installer.
 
 ### "Windows protected your PC" SmartScreen warning
 On first run, Windows SmartScreen may block the runtime. Click **More info** →

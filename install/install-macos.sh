@@ -366,9 +366,9 @@ launchctl load "${PLIST_PATH}"
 info "agent loaded."
 
 # Wait for it to come up.
-step "Waiting for service to come up"
+step "Waiting for service to come up (first start can take a minute)"
 OK=0
-for i in $(seq 1 30); do
+for i in $(seq 1 90); do
   if curl -fsS "http://localhost:${PORT}/api/config" >/dev/null 2>&1; then
     OK=1
     break
@@ -376,7 +376,7 @@ for i in $(seq 1 30); do
   sleep 1
 done
 if [ "${OK}" -ne 1 ]; then
-  warn "service did not respond within 30s. Logs:"
+  warn "service did not respond within 90s — it may still be starting. Logs:"
   warn "  tail -f '${LOG_DIR}/childcheck.stderr.log'"
 else
   info "service is up."

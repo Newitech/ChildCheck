@@ -43,6 +43,32 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     exit 1
 }
 
+# --- PowerShell version check ------------------------------------------------
+# Windows PowerShell 5.1 (the built-in one) has issues: it refuses unsigned
+# scripts under the default execution policy, its Invoke-WebRequest is slow
+# and TLS-1.2-only by default, and some syntax behaves differently.
+# PowerShell 7+ (pwsh) is strongly recommended. Warn (don't abort) on < 7.
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    Write-Host ""
+    Write-Host "WARNING: you are running Windows PowerShell $($PSVersionTable.PSVersion)." -ForegroundColor Yellow
+    Write-Host "PowerShell 7+ is recommended — 5.1 is known to cause install issues" -ForegroundColor Yellow
+    Write-Host "(unsigned-script blocks, older TLS, slower downloads)." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Install PowerShell 7 from: https://github.com/PowerShell/PowerShell/releases" -ForegroundColor Yellow
+    Write-Host "(or run:  winget install Microsoft.PowerShell )" -ForegroundColor Yellow
+    Write-Host "Then re-run this script in the 'PowerShell 7' (pwsh) terminal as Administrator." -ForegroundColor Yellow
+    Write-Host ""
+    $continue = Read-Host "Continue with Windows PowerShell 5.1 anyway? [y/N]"
+    if ($continue -notmatch "^[Yy]$") {
+        Write-Host "Aborting. Please re-run with PowerShell 7."
+        exit 0
+    }
+    # Older PowerShell defaults to TLS 1.0/1.1 which GitHub rejects.
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    } catch {}
+}
+
 # --- Constants ---------------------------------------------------------------
 $target = "windows-x64"
 $binaryName = "bun.exe"
@@ -60,15 +86,24 @@ function Write-Step($msg)  { Write-Host ""; Write-Host "==> $msg" -ForegroundCol
 
 # --- Port helpers ------------------------------------------------------------
 # Test-PortFree(port) → $true if nothing is listening on the port.
+# Tests BOTH IPv4 and IPv6 loopback — an app bound only to [::]:port would
+# otherwise look "free" to an IPv4-only probe, and localhost often resolves
+# to ::1 first, so the health-check would then hit the wrong app.
 function Test-PortFree([int]$Port) {
-    try {
-        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
-        $listener.Start()
-        $listener.Stop()
-        return $true
-    } catch {
-        return $false
+    $addresses = @([System.Net.IPAddress]::Loopback)
+    if ([System.Net.Sockets.Socket]::OSSupportsIPv6) {
+        $addresses += [System.Net.IPAddress]::IPv6Loopback
     }
+    foreach ($addr in $addresses) {
+        try {
+            $listener = [System.Net.Sockets.TcpListener]::new($addr, $Port)
+            $listener.Start()
+            $listener.Stop()
+        } catch {
+            return $false
+        }
+    }
+    return $true
 }
 
 # Read-Port($Default, $Label) → the chosen port number.
@@ -166,17 +201,43 @@ try {
 
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 
-    # Copy each top-level item individually, skipping problematic paths
-    # (e.g. .next/node_modules can have symlink-like files that Windows denies).
-    Get-ChildItem -Path $srcDir -Force | ForEach-Object {
-        $dest = Join-Path $InstallDir $_.Name
-        try {
-            Copy-Item -Path $_.FullName -Destination $dest -Recurse -Force -ErrorAction Stop
-        } catch {
-            Write-Warn "skipping $($_.Name): $($_.Exception.Message)"
-        }
+    # Copy with robocopy: per-file retries (/R:2 /W:1) and a single locked or
+    # slow-scanned file (antivirus real-time scanning) does NOT abort the
+    # whole tree — unlike Copy-Item -Recurse which leaves a partial copy.
+    # robocopy exit codes 0-7 are success; >=8 means failure.
+    & robocopy "$srcDir" "$InstallDir" /E /NFL /NDL /NJH /R:2 /W:1 | Out-Null
+    if ($LASTEXITCODE -ge 8) {
+        Write-Err "file copy failed (robocopy exit code $LASTEXITCODE)."
+        Write-Err "Antivirus/Defender may be blocking files. Add an exclusion for $InstallDir and re-run."
+        exit 1
     }
-    # Remove the source's empty data/db/config dirs so we can symlink ours.
+    Write-Info "files copied."
+
+    # Verify the install is COMPLETE before continuing. A partial copy makes
+    # the service crash at boot with confusing ENOENT errors deep in .next.
+    $requiredFiles = @(
+        "bun.exe",
+        "server.js",
+        "service-entry.js",
+        ".next\server\pages-manifest.json",
+        ".next\server\app-paths-manifest.json",
+        "mini-services\realtime\index.ts",
+        "prisma\schema.prisma",
+        "node_modules\prisma\build\index.js"
+    )
+    $requiredDirs = @(".next\static", "public")
+    $missing = @()
+    foreach ($f in $requiredFiles) { if (-not (Test-Path (Join-Path $InstallDir $f) -PathType Leaf)) { $missing += $f } }
+    foreach ($d in $requiredDirs)  { if (-not (Test-Path (Join-Path $InstallDir $d) -PathType Container)) { $missing += "$d\" } }
+    if ($missing.Count -gt 0) {
+        Write-Err "install is INCOMPLETE — these files are missing from ${InstallDir}:"
+        $missing | ForEach-Object { Write-Err "  - $_" }
+        Write-Err "Antivirus/Defender may have quarantined them. Add an exclusion for"
+        Write-Err "$InstallDir (and $env:ProgramData\childcheck-install-*), then re-run the installer."
+        exit 1
+    }
+
+    # Remove the source's empty data/db/config dirs so we can junction ours.
     Remove-Item -Path (Join-Path $InstallDir "data") -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -Path (Join-Path $InstallDir "db") -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -Path (Join-Path $InstallDir "config") -Recurse -Force -ErrorAction SilentlyContinue
@@ -210,6 +271,35 @@ try {
         $existingRt   = (Get-Content $envFile | Where-Object { $_ -match "^REALTIME_PORT=" }) -replace "REALTIME_PORT=", ""
         $port        = if ($existingPort) { [int]$existingPort.Trim() } else { 3000 }
         $realtimePort = if ($existingRt)   { [int]$existingRt.Trim() }   else { 3003 }
+
+        # Reinstalls skip the port prompts — but the old service is stopped by
+        # now (the overwrite step stops it), so a configured port that is STILL
+        # in use belongs to another application. Offer to move to a free port.
+        $portChecks = @(
+            @{ Key = "PORT";          Label = "web server" },
+            @{ Key = "REALTIME_PORT"; Label = "realtime (Socket.io)" }
+        )
+        foreach ($check in $portChecks) {
+            $current = if ($check.Key -eq "PORT") { $port } else { $realtimePort }
+            if (Test-PortFree $current) { continue }
+            Write-Warn "$($check.Key)=$current (from existing .env) is in use by another application."
+            $suggest = $current + 1
+            while (-not (Test-PortFree $suggest)) { $suggest++ }
+            $ans = Read-Host "Use port $suggest for $($check.Label) instead? [Y/n]"
+            if ($ans -match "^[Nn]") {
+                Write-Warn "keeping $($check.Key)=$current — the service will fail to bind until the conflict is resolved."
+                continue
+            }
+            (Get-Content $envFile) -replace "^$($check.Key)=.*", "$($check.Key)=$suggest" | Set-Content $envFile -Encoding ASCII
+            if ($check.Key -eq "PORT") {
+                # NEXTAUTH_URL embeds the web port — update it too.
+                (Get-Content $envFile) -replace "^(NEXTAUTH_URL=.*):$current(/.*)?$", "`${1}:$suggest`${2}" | Set-Content $envFile -Encoding ASCII
+                $port = $suggest
+            } else {
+                $realtimePort = $suggest
+            }
+            Write-Info "updated $($check.Key)=$suggest in .env."
+        }
     } else {
         # Prompt for ports if defaults are in use.
         Write-Step "Choosing ports (default: web 3000, realtime 3003)"
@@ -312,19 +402,28 @@ HOSTNAME=0.0.0.0
     & $winswExe start
     Write-Info "service installed + started."
 
-    # Wait for it to come up.
-    Write-Step "Waiting for service to come up"
+    # Wait for it to come up. First start runs prisma db push + a cold Next
+    # boot, which can take over 30s on slower machines — allow 90s.
+    # Uses curl.exe (ships with Windows 10+) so we can distinguish "nothing
+    # listening yet" from "a DIFFERENT app is answering on this port".
+    Write-Step "Waiting for service to come up (first start can take a minute)"
     $ok = $false
-    for ($i = 1; $i -le 30; $i++) {
-        try {
-            $resp = Invoke-WebRequest -Uri "http://localhost:$port/api/config" -UseBasicParsing -TimeoutSec 3
-            if ($resp.StatusCode -eq 200) { $ok = $true; break }
-        } catch {}
+    $foreign = $false
+    for ($i = 1; $i -le 90; $i++) {
+        $code = & curl.exe -s -o NUL -w "%{http_code}" --max-time 3 "http://localhost:$port/api/config" 2>$null
+        if ($code -eq "200") { $ok = $true; break }
+        if ($code -and $code -ne "000") { $foreign = $true }
         Start-Sleep -Seconds 1
     }
     if (-not $ok) {
-        Write-Warn "service did not respond within 30s."
-        Write-Warn "check logs at: $dataDir\logs"
+        if ($foreign) {
+            Write-Warn "another application is answering on port $port (it is NOT ChildCheck)."
+            Write-Warn "ChildCheck probably failed to bind. Stop the other app, or change PORT"
+            Write-Warn "in $envFile and restart the service."
+        } else {
+            Write-Warn "service did not respond within 90s — it may still be starting."
+        }
+        Write-Warn "check 'Get-Service ChildCheck' and logs at: $dataDir\logs"
     } else {
         Write-Info "service is up."
     }

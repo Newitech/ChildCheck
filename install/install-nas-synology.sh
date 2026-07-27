@@ -424,7 +424,7 @@ info "started (pid $(cat "${DATA_DIR}/childcheck.pid"))."
 
 # Wait for it to come up.
 OK=0
-for i in $(seq 1 30); do
+for i in $(seq 1 90); do
   if curl -fsS "http://localhost:${PORT}/api/config" >/dev/null 2>&1; then
     OK=1
     break
@@ -432,7 +432,7 @@ for i in $(seq 1 30); do
   sleep 1
 done
 if [ "${OK}" -ne 1 ]; then
-  warn "service did not respond within 30s. Check logs:"
+  warn "service did not respond within 90s — it may still be starting. Check logs:"
   warn "  tail -f ${LOG_DIR}/childcheck.stderr.log"
 else
   info "service is up."

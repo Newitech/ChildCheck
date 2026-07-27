@@ -29,12 +29,16 @@ const nextConfig: NextConfig = {
       "./db/**",
       "./config/**",
       "./prisma/db/**",
-      // Dev logs / planning docs.
+      // Dev logs / planning docs / local env files (secrets must never ship).
       "./*.log",
       "./worklog.md",
       "./PLAN.md",
       "./MORNING-SUMMARY.md",
       "./tsconfig.tsbuildinfo",
+      "./.env",
+      "./.env.local",
+      "./.env.production",
+      "./.env.development",
     ],
   },
   typescript: {

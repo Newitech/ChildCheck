@@ -310,6 +310,34 @@ if [ -f "${ENV_FILE}" ]; then
   PORT="${PORT:-3000}"
   REALTIME_PORT="$(grep -E '^REALTIME_PORT=' "${ENV_FILE}" | cut -d= -f2- || true)"
   REALTIME_PORT="${REALTIME_PORT:-3003}"
+
+  # Reinstalls skip the port prompts — but the old service is stopped by now
+  # (the overwrite step stops it), so a configured port that is STILL in use
+  # belongs to another application. Offer to move to a free port.
+  for key in PORT REALTIME_PORT; do
+    if [ "${key}" = "PORT" ]; then current="${PORT}"; label="web server"; else current="${REALTIME_PORT}"; label="realtime (Socket.io)"; fi
+    if ! port_in_use "${current}"; then continue; fi
+    warn "${key}=${current} (from existing .env) is in use by another application."
+    suggest=$(( current + 1 ))
+    while port_in_use "${suggest}"; do suggest=$(( suggest + 1 )); done
+    chosen="${suggest}"
+    if [ "${INTERACTIVE}" -eq 1 ]; then
+      safe_read -p "Use port ${suggest} for ${label} instead? [Y/n] " ans
+      if [[ "${ans}" =~ ^[Nn] ]]; then
+        warn "keeping ${key}=${current} — the service will fail to bind until the conflict is resolved."
+        continue
+      fi
+    fi
+    sed -i "s|^${key}=.*|${key}=${chosen}|" "${ENV_FILE}"
+    if [ "${key}" = "PORT" ]; then
+      # NEXTAUTH_URL embeds the web port — update it too.
+      sed -i "s|^\(NEXTAUTH_URL=.*\):${current}\(/.*\)\?$|\1:${chosen}\2|" "${ENV_FILE}"
+      PORT="${chosen}"
+    else
+      REALTIME_PORT="${chosen}"
+    fi
+    info "updated ${key}=${chosen} in .env."
+  done
 else
   step "Choosing ports (default: web 3000, realtime 3003)"
 
@@ -447,18 +475,31 @@ systemctl enable "${SERVICE_USER}"
 systemctl restart "${SERVICE_USER}"
 info "service enabled + started."
 
-# Wait for it to come up (poll /api/config).
-step "Waiting for service to come up"
+# Wait for it to come up (poll /api/config). First start runs prisma db push
+# + a cold Next boot, which can take over 30s on slower machines — allow 90s.
+# Distinguish "nothing listening yet" from "a DIFFERENT app answering".
+step "Waiting for service to come up (first start can take a minute)"
 OK=0
-for i in $(seq 1 30); do
-  if curl -fsS "http://localhost:${PORT}/api/config" >/dev/null 2>&1; then
+FOREIGN=0
+for i in $(seq 1 90); do
+  code="$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://localhost:${PORT}/api/config" 2>/dev/null || echo 000)"
+  if [ "${code}" = "200" ]; then
     OK=1
     break
+  fi
+  if [ -n "${code}" ] && [ "${code}" != "000" ]; then
+    FOREIGN=1
   fi
   sleep 1
 done
 if [ "${OK}" -ne 1 ]; then
-  warn "service did not respond on http://localhost:${PORT}/api/config within 30s."
+  if [ "${FOREIGN}" -eq 1 ]; then
+    warn "another application is answering on port ${PORT} (it is NOT ChildCheck)."
+    warn "ChildCheck probably failed to bind. Stop the other app, or change PORT"
+    warn "in ${ENV_FILE} and run: systemctl restart ${SERVICE_USER}"
+  else
+    warn "service did not respond on http://localhost:${PORT}/api/config within 90s — it may still be starting."
+  fi
   warn "check logs with:  journalctl -u ${SERVICE_USER} -f"
 else
   info "service is up."

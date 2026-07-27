@@ -184,6 +184,13 @@ for TARGET in "${TARGETS[@]}"; do
   echo "[build:${TARGET}] copying Next.js standalone..."
   cp -R ".next/standalone/." "${OUT_DIR}/"
 
+  # SECURITY: Next's standalone build copies the local .env files into the
+  # bundle — which would ship DEV SECRETS in the release tarball. Remove
+  # them. Runtime config comes from config/.env (installers) or env vars
+  # injected by systemd/WinSW; users create their own .env per the README.
+  rm -f "${OUT_DIR}/.env" "${OUT_DIR}/.env.local" \
+        "${OUT_DIR}/.env.production" "${OUT_DIR}/.env.development"
+
   # Make sure .next/static is present alongside server.js (the build script
   # already copied it into standalone, but be defensive).
   if [ ! -d "${OUT_DIR}/.next/static" ]; then
@@ -236,17 +243,44 @@ PJSON
 // Next.js standalone server and the realtime mini-service as child
 // processes, and stops them together.
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const root = process.cwd();
 const bunBin = process.platform === "win32" ? join(root, "bun.exe") : join(root, "bun");
 const prismaCli = join(root, "node_modules", "prisma", "build", "index.js");
 
+// 0. Load env files for MANUAL runs (childcheck / childcheck.bat). When run
+//    as a service, systemd (EnvironmentFile) / WinSW (<env> entries) inject
+//    the variables directly — those always win because we never override a
+//    variable that is already set. The installers write config/.env (via a
+//    junction/symlink into the data dir); a user-created ./.env wins last.
+function loadEnvFile(p) {
+  let content;
+  try {
+    content = readFileSync(p, "utf8");
+  } catch {
+    return false;
+  }
+  for (const line of content.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const i = t.indexOf("=");
+    if (i < 0) continue;
+    const k = t.slice(0, i).trim();
+    const v = t.slice(i + 1).trim();
+    if (k && !(k in process.env)) process.env[k] = v;
+  }
+  return true;
+}
+for (const p of [join(root, "config", ".env"), join(root, ".env")]) {
+  if (loadEnvFile(p)) console.log(`[childcheck] loaded env from ${p}`);
+}
+
 // 1. Apply the database schema (creates the SQLite file + tables on first
 //    run, applies schema changes after updates). Non-fatal on failure — the
 //    server may still work if the DB is already set up. DATABASE_URL comes
-//    from the environment (systemd EnvironmentFile / WinSW <env> entries).
+//    from the environment (service injection or the env files loaded above).
 if (existsSync(prismaCli)) {
   console.log("[childcheck] applying database schema (prisma db push)...");
   const r = spawnSync(bunBin, [prismaCli, "db", "push", "--skip-generate"], {
