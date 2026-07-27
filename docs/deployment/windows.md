@@ -21,36 +21,44 @@ as the service wrapper.
 
 ## Install
 
-### Option A — clone + run locally
+### Option A — one-liner (recommended)
+
+Open an **elevated** PowerShell (right-click → Run as Administrator) and run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -Command "iex (irm https://raw.githubusercontent.com/Newitech/ChildCheck/main/install/install-windows.ps1)"
+```
+
+### Option B — clone + run locally
 
 ```powershell
 git clone https://github.com/Newitech/ChildCheck.git
 cd ChildCheck
-.\install\install-windows.ps1
+powershell -ExecutionPolicy Bypass -File .\install\install-windows.ps1
 ```
 
-### Option B — install a specific tarball
+### Option C — install a specific tarball
 
 ```powershell
-.\install\install-windows.ps1 -Source .\childcheck-windows-x64.tar.gz
+powershell -ExecutionPolicy Bypass -File .\install\install-windows.ps1 -Source .\childcheck-windows-x64.tar.gz
 # or:
-.\install\install-windows.ps1 -Source .\childcheck-windows-x64\
+powershell -ExecutionPolicy Bypass -File .\install\install-windows.ps1 -Source .\childcheck-windows-x64\
 ```
 
-### Option C — install a specific version
+### Option D — install a specific version
 
 ```powershell
-.\install\install-windows.ps1 -Version 1.2.3
+powershell -ExecutionPolicy Bypass -File .\install\install-windows.ps1 -Version 1.2.3
 ```
 
-> ⚠️ If PowerShell Execution Policy blocks the script, run:
+> ⚠️ The `-ExecutionPolicy Bypass` flag is required on stock Windows because the
+> script is not digitally signed. It bypasses the signing check for this one
+> invocation only — it does not change your system-wide policy. If you'd rather
+> allow local scripts permanently:
 > ```powershell
 > Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 > ```
-> Or bypass once with:
-> ```powershell
-> powershell -ExecutionPolicy Bypass -File .\install\install-windows.ps1
-> ```
+> then you can run `.\install\install-windows.ps1` directly.
 
 The installer will:
 
